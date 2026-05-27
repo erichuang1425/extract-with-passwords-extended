@@ -99,6 +99,9 @@ $ClearClipboardOnExit = $true
 $OpenOutputAfterSuccess = $true
 $AlwaysShowFinalConfirmation = $true
 
+$ExtractionTimeoutSeconds = 300
+$LogRetentionDays = 30
+
 $EncryptionCapableExtensions = @{
     '.zip' = $true; '.zipx' = $true; '.7z' = $true; '.rar' = $true
 }
@@ -109,6 +112,13 @@ New-Item -ItemType Directory -Force -Path $PwDir | Out-Null
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 $RunStamp = Get-Date -Format "yyyyMMdd_HHmmss"
 $RunLogPath = Join-Path $LogDir "ArchivePwExtract_$RunStamp.log"
+
+if ($LogRetentionDays -gt 0) {
+    $cutoff = (Get-Date).AddDays(-$LogRetentionDays)
+    Get-ChildItem -LiteralPath $LogDir -Filter "*.log" -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.LastWriteTime -lt $cutoff } |
+        Remove-Item -Force -ErrorAction SilentlyContinue
+}
 
 # ============================================================
 # Logging
@@ -278,14 +288,17 @@ function Invoke-ProcessLogged {
         $stdoutTask = $p.StandardOutput.ReadToEndAsync()
         $stderrTask = $p.StandardError.ReadToEndAsync()
 
-        # Immediately close stdin so tools cannot hang waiting for Enter/password input.
-        try { $p.StandardInput.Close() } catch {}
+        try { $p.StandardInput.Close() } catch {
+            Write-Log "Could not close stdin: $($_.Exception.Message)" "WARN"
+        }
 
         if ($TimeoutSeconds -gt 0) {
             $exited = $p.WaitForExit($TimeoutSeconds * 1000)
 
             if (-not $exited) {
-                try { $p.Kill() } catch {}
+                try { $p.Kill() } catch {
+                    Write-Log "Could not kill timed-out process: $($_.Exception.Message)" "WARN"
+                }
                 $exitCode = -998
                 $output = @("Process timed out after $TimeoutSeconds seconds and was killed.")
             } else {
@@ -390,30 +403,35 @@ function Read-YesNo {
 # Engine detection
 # ============================================================
 
-function Get-NormalSevenZipPath {
-    $candidates = @(
-        "$env:ProgramFiles\7-Zip\7z.exe",
-        "${env:ProgramFiles(x86)}\7-Zip\7z.exe",
-        "$env:LOCALAPPDATA\Programs\7-Zip\7z.exe",
-        "C:\ProgramData\chocolatey\bin\7z.exe"
-    )
+function Find-FirstExistingPath {
+    param([string[]]$Candidates)
 
-    foreach ($path in $candidates) {
+    foreach ($path in $Candidates) {
         if ($path -and (Test-Path -LiteralPath $path)) {
             return $path
         }
     }
 
+    return $null
+}
+
+function Get-NormalSevenZipPath {
+    $found = Find-FirstExistingPath @(
+        "$env:ProgramFiles\7-Zip\7z.exe",
+        "${env:ProgramFiles(x86)}\7-Zip\7z.exe",
+        "$env:LOCALAPPDATA\Programs\7-Zip\7z.exe",
+        "C:\ProgramData\chocolatey\bin\7z.exe"
+    )
+    if ($found) { return $found }
+
     $cmd = Get-Command "7z.exe" -ErrorAction SilentlyContinue
-    if ($cmd) {
-        return $cmd.Source
-    }
+    if ($cmd) { return $cmd.Source }
 
     return $null
 }
 
 function Get-PeaZipBundledSevenZipPath {
-    $candidates = @(
+    return Find-FirstExistingPath @(
         "$env:ProgramFiles\PeaZip\res\bin\7z\7z.exe",
         "${env:ProgramFiles(x86)}\PeaZip\res\bin\7z\7z.exe",
         "$env:ProgramFiles\PeaZip\res\7z\7z.exe",
@@ -421,18 +439,10 @@ function Get-PeaZipBundledSevenZipPath {
         "$env:LOCALAPPDATA\Programs\PeaZip\res\bin\7z\7z.exe",
         "$env:LOCALAPPDATA\Programs\PeaZip\res\7z\7z.exe"
     )
-
-    foreach ($path in $candidates) {
-        if ($path -and (Test-Path -LiteralPath $path)) {
-            return $path
-        }
-    }
-
-    return $null
 }
 
 function Get-WinRarOrUnRarPath {
-    $candidates = @(
+    $found = Find-FirstExistingPath @(
         "$env:ProgramFiles\WinRAR\WinRAR.exe",
         "${env:ProgramFiles(x86)}\WinRAR\WinRAR.exe",
         "$env:LOCALAPPDATA\Programs\WinRAR\WinRAR.exe",
@@ -440,22 +450,13 @@ function Get-WinRarOrUnRarPath {
         "${env:ProgramFiles(x86)}\WinRAR\UnRAR.exe",
         "$env:LOCALAPPDATA\Programs\WinRAR\UnRAR.exe"
     )
-
-    foreach ($path in $candidates) {
-        if ($path -and (Test-Path -LiteralPath $path)) {
-            return $path
-        }
-    }
+    if ($found) { return $found }
 
     $cmd = Get-Command "WinRAR.exe" -ErrorAction SilentlyContinue
-    if ($cmd) {
-        return $cmd.Source
-    }
+    if ($cmd) { return $cmd.Source }
 
     $cmd2 = Get-Command "UnRAR.exe" -ErrorAction SilentlyContinue
-    if ($cmd2) {
-        return $cmd2.Source
-    }
+    if ($cmd2) { return $cmd2.Source }
 
     return $null
 }
@@ -517,6 +518,12 @@ function Sanitize-FileName {
     }
 
     return $Name
+}
+
+function Format-MaskedPassword {
+    param([string]$Password)
+    if ($Password.Length -le 4) { return ("*" * $Password.Length) }
+    return ($Password.Substring(0, 2) + ("*" * ($Password.Length - 2)))
 }
 
 function Get-ArchiveBaseName {
@@ -599,7 +606,7 @@ function Test-IsSupportedArchiveName {
         $n -imatch "\.rar\.001$" -or
         $n -imatch "\.part\d+\.rar$" -or
         $n -imatch "\.z\d+$" -or
-        $n -imatch "\.r\d\d$"
+        $n -imatch "\.r\d{2,}$"
     )
 }
 
@@ -638,7 +645,7 @@ function Test-IsFirstVolumeOrNormalArchive {
         return ($n -imatch "\.part0*1\.rar$")
     }
 
-    if ($n -imatch "\.r\d\d$") {
+    if ($n -imatch "\.r\d{2,}$") {
         return $false
     }
 
@@ -844,6 +851,23 @@ function Clear-AttemptOutput {
     }
 }
 
+function Remove-EmptyOutputDir {
+    param(
+        [string]$OutputDir,
+        [bool]$SeparateFolders
+    )
+
+    try {
+        if ($SeparateFolders -and (Test-Path -LiteralPath $OutputDir)) {
+            if ((Get-DirectoryItemCount -Dir $OutputDir) -eq 0) {
+                Remove-Item -LiteralPath $OutputDir -Force -ErrorAction SilentlyContinue
+            }
+        }
+    } catch {
+        Write-Log "Failed to remove empty output folder $OutputDir : $($_.Exception.Message)" "WARN"
+    }
+}
+
 function New-7zPasswordArgs {
     param(
         [string]$Password,
@@ -863,7 +887,8 @@ function Test-With7z {
         [string]$SevenZip,
         [string]$Archive,
         [string]$Password,
-        [bool]$OmitPasswordIfEmpty = $false
+        [bool]$OmitPasswordIfEmpty = $false,
+        [int]$Timeout = 0
     )
 
     $argumentList = @("t", "-y", "-bd")
@@ -874,7 +899,7 @@ function Test-With7z {
     }
     $argumentList += $Archive
 
-    $result = Invoke-ProcessLogged -Exe $SevenZip -ArgumentList $argumentList -Operation "7Z TEST" -ShowOutput $false
+    $result = Invoke-ProcessLogged -Exe $SevenZip -ArgumentList $argumentList -Operation "7Z TEST" -ShowOutput $false -TimeoutSeconds $Timeout
     $code = [int]$result.ExitCode
 
     return ($code -eq 0)
@@ -886,7 +911,8 @@ function Extract-With7z {
         [string]$Archive,
         [string]$Password,
         [string]$OutputDir,
-        [bool]$OmitPasswordIfEmpty = $false
+        [bool]$OmitPasswordIfEmpty = $false,
+        [int]$Timeout = 0
     )
 
     New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
@@ -900,7 +926,7 @@ function Extract-With7z {
     }
     $argumentList += $Archive
 
-    $result = Invoke-ProcessLogged -Exe $SevenZip -ArgumentList $argumentList -Operation "7Z EXTRACT" -ShowOutput $false
+    $result = Invoke-ProcessLogged -Exe $SevenZip -ArgumentList $argumentList -Operation "7Z EXTRACT" -ShowOutput $false -TimeoutSeconds $Timeout
     $code = [int]$result.ExitCode
 
     $after = Get-DirectoryItemCount -Dir $OutputDir
@@ -935,17 +961,18 @@ function Test-WithWinRar {
     param(
         [string]$RarExe,
         [string]$Archive,
-        [string]$Password
+        [string]$Password,
+        [int]$Timeout = 0
     )
 
     $argumentList = @("t", "-idq", "-y")
     $argumentList += @(New-RarPasswordArgs -Password $Password)
     $argumentList += $Archive
 
-    $result = Invoke-ProcessLogged -Exe $RarExe -ArgumentList $argumentList -Operation "WINRAR/UNRAR TEST" -ShowOutput $false
+    $result = Invoke-ProcessLogged -Exe $RarExe -ArgumentList $argumentList -Operation "WINRAR/UNRAR TEST" -ShowOutput $false -TimeoutSeconds $Timeout
     $code = [int]$result.ExitCode
 
-    return ($code -eq 0 -or $code -eq 1)
+    return ($code -eq 0)
 }
 
 function Extract-WithWinRar {
@@ -953,7 +980,8 @@ function Extract-WithWinRar {
         [string]$RarExe,
         [string]$Archive,
         [string]$Password,
-        [string]$OutputDir
+        [string]$OutputDir,
+        [int]$Timeout = 0
     )
 
     New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
@@ -966,7 +994,7 @@ function Extract-WithWinRar {
     $argumentList += $Archive
     $argumentList += $dest
 
-    $result = Invoke-ProcessLogged -Exe $RarExe -ArgumentList $argumentList -Operation "WINRAR/UNRAR EXTRACT" -ShowOutput $false
+    $result = Invoke-ProcessLogged -Exe $RarExe -ArgumentList $argumentList -Operation "WINRAR/UNRAR EXTRACT" -ShowOutput $false -TimeoutSeconds $Timeout
     $code = [int]$result.ExitCode
 
     $after = Get-DirectoryItemCount -Dir $OutputDir
@@ -994,7 +1022,8 @@ function Try-EnginePassword {
         [string]$Password,
         [string]$OutputDir,
         [bool]$CanClearFailedOutput = $true,
-        [bool]$OmitPasswordArg = $false
+        [bool]$OmitPasswordArg = $false,
+        [int]$Timeout = 0
     )
 
     Write-Log "Trying engine $EngineName on archive $Archive"
@@ -1003,24 +1032,24 @@ function Try-EnginePassword {
     $extractOk = $false
 
     if ($EngineName -eq "7-Zip" -or $EngineName -eq "PeaZip bundled 7z") {
-        $testOk = Test-With7z -SevenZip $EnginePath -Archive $Archive -Password $Password -OmitPasswordIfEmpty $OmitPasswordArg
+        $testOk = Test-With7z -SevenZip $EnginePath -Archive $Archive -Password $Password -OmitPasswordIfEmpty $OmitPasswordArg -Timeout $Timeout
 
         if ($testOk -or $TryExtractEvenIfTestFails) {
             if (-not $testOk) {
                 Write-Log "$EngineName test failed; trying extraction fallback anyway." "WARN"
             }
 
-            $extractOk = Extract-With7z -SevenZip $EnginePath -Archive $Archive -Password $Password -OutputDir $OutputDir -OmitPasswordIfEmpty $OmitPasswordArg
+            $extractOk = Extract-With7z -SevenZip $EnginePath -Archive $Archive -Password $Password -OutputDir $OutputDir -OmitPasswordIfEmpty $OmitPasswordArg -Timeout $Timeout
         }
     } elseif ($EngineName -eq "WinRAR" -or $EngineName -eq "UnRAR") {
-        $testOk = Test-WithWinRar -RarExe $EnginePath -Archive $Archive -Password $Password
+        $testOk = Test-WithWinRar -RarExe $EnginePath -Archive $Archive -Password $Password -Timeout $Timeout
 
         if ($testOk -or $TryExtractEvenIfTestFails) {
             if (-not $testOk) {
                 Write-Log "$EngineName test failed; trying extraction fallback anyway." "WARN"
             }
 
-            $extractOk = Extract-WithWinRar -RarExe $EnginePath -Archive $Archive -Password $Password -OutputDir $OutputDir
+            $extractOk = Extract-WithWinRar -RarExe $EnginePath -Archive $Archive -Password $Password -OutputDir $OutputDir -Timeout $Timeout
         }
     }
 
@@ -1096,6 +1125,7 @@ function Get-EnginePlanForArchive {
 
 try {
     Clear-Host
+    $totalStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 
     Write-Log "============================================================"
     Write-Log "ArchivePwExtract multi-engine patched run started"
@@ -1108,6 +1138,8 @@ try {
     Write-Log "ExistingOutputBehavior: $ExistingOutputBehavior"
     Write-Log "SevenZipOverwriteMode: $SevenZipOverwriteMode"
     Write-Log "TryExtractEvenIfTestFails: $TryExtractEvenIfTestFails"
+    Write-Log "ExtractionTimeoutSeconds: $ExtractionTimeoutSeconds"
+    Write-Log "LogRetentionDays: $LogRetentionDays"
 
     foreach ($p in $InputPaths) {
         Write-Log "Input: $p"
@@ -1168,7 +1200,12 @@ try {
     Write-Both $PwFile "INFO"
     Write-Both "" "INFO"
     Write-Both "Output behavior:" "INFO" "Cyan"
-    Write-Both "Existing extracted folders will be REPLACED, not aliased to _2/_3." "INFO"
+    switch ($ExistingOutputBehavior.ToLowerInvariant()) {
+        "replace" { Write-Both "Existing extracted folders will be REPLACED." "INFO" }
+        "merge"   { Write-Both "Existing extracted folders will be MERGED (files overwritten)." "INFO" }
+        "new"     { Write-Both "Existing extracted folders will be kept; new _2/_3 folders created." "INFO" }
+        default   { Write-Both "Existing extracted folders will be REPLACED." "INFO" }
+    }
     Write-Both "" "INFO"
 
     Write-Both "Found archive entry files:" "INFO"
@@ -1211,6 +1248,9 @@ try {
 
     if (-not $SeparateFolders) {
         $firstDir = Split-Path $Archives[0] -Parent
+        if ([string]::IsNullOrEmpty($firstDir)) {
+            $firstDir = [IO.Path]::GetPathRoot($Archives[0])
+        }
         $defaultCommon = Join-Path $firstDir ("Extracted_Batch_" + (Get-Date -Format "yyyyMMdd_HHmmss"))
 
         Write-Both "" "INFO"
@@ -1222,7 +1262,18 @@ try {
         if ([string]::IsNullOrWhiteSpace($custom)) {
             $CommonOutputDir = $defaultCommon
         } else {
-            $CommonOutputDir = $custom.Trim('"')
+            $cleaned = $custom.Trim('"')
+            $invalidChars = [IO.Path]::GetInvalidPathChars()
+            $hasInvalid = $false
+            foreach ($c in $invalidChars) {
+                if ($cleaned.Contains($c)) { $hasInvalid = $true; break }
+            }
+            if ($hasInvalid) {
+                Write-Both "Invalid characters in path. Using default." "WARN" "Yellow"
+                $CommonOutputDir = $defaultCommon
+            } else {
+                $CommonOutputDir = $cleaned
+            }
         }
 
         New-Item -ItemType Directory -Force -Path $CommonOutputDir | Out-Null
@@ -1245,6 +1296,7 @@ try {
 
     foreach ($Archive in $Archives) {
         $ArchiveIndex++
+        $archiveStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
         Write-Section "[$ArchiveIndex/$($Archives.Count)] Processing"
         Write-Both $Archive "INFO"
         Write-Both "" "INFO"
@@ -1293,7 +1345,8 @@ try {
                     -Password "" `
                     -OutputDir $outputDir `
                     -CanClearFailedOutput $SeparateFolders `
-                    -OmitPasswordArg $true
+                    -OmitPasswordArg $true `
+                    -Timeout $ExtractionTimeoutSeconds
 
                 if ($ok) {
                     Write-Both "" "INFO"
@@ -1318,14 +1371,7 @@ try {
                 Write-Both "Actual error details were written to:" "ERROR" "Yellow"
                 Write-Both $RunLogPath "ERROR" "Yellow"
                 $Failed += $Archive
-
-                try {
-                    if ($SeparateFolders -and (Test-Path -LiteralPath $outputDir)) {
-                        if ((Get-DirectoryItemCount -Dir $outputDir) -eq 0) {
-                            Remove-Item -LiteralPath $outputDir -Force -ErrorAction SilentlyContinue
-                        }
-                    }
-                } catch {}
+                Remove-EmptyOutputDir -OutputDir $outputDir -SeparateFolders $SeparateFolders
             }
 
             continue
@@ -1352,7 +1398,8 @@ try {
                     -Archive $Archive `
                     -Password $Pw `
                     -OutputDir $outputDir `
-                    -CanClearFailedOutput $SeparateFolders
+                    -CanClearFailedOutput $SeparateFolders `
+                    -Timeout $ExtractionTimeoutSeconds
 
                 if ($ok) {
                     Write-Both "" "INFO"
@@ -1366,11 +1413,7 @@ try {
                         if ($ShowPasswordInConsole) {
                             Write-Host $Pw
                         } else {
-                            if ($Pw.Length -le 4) {
-                                Write-Host ("*" * $Pw.Length)
-                            } else {
-                                Write-Host ($Pw.Substring(0, 2) + ("*" * ($Pw.Length - 2)))
-                            }
+                            Write-Host (Format-MaskedPassword $Pw)
                         }
 
                         Write-Log "SUCCESS: found password. Password redacted in log."
@@ -1413,22 +1456,21 @@ try {
             Write-Both "Actual error details were written to:" "ERROR" "Yellow"
             Write-Both $RunLogPath "ERROR" "Yellow"
             $Failed += $Archive
-
-            try {
-                if ($SeparateFolders -and (Test-Path -LiteralPath $outputDir)) {
-                    if ((Get-DirectoryItemCount -Dir $outputDir) -eq 0) {
-                        Remove-Item -LiteralPath $outputDir -Force -ErrorAction SilentlyContinue
-                    }
-                }
-            } catch {}
+            Remove-EmptyOutputDir -OutputDir $outputDir -SeparateFolders $SeparateFolders
         }
+
+        $archiveStopwatch.Stop()
+        Write-Log "Archive completed in $($archiveStopwatch.Elapsed.ToString('hh\:mm\:ss'))"
     }
+
+    $totalStopwatch.Stop()
 
     Write-Section "Summary"
 
     Write-Both "Succeeded: $(@($Succeeded).Count)" "INFO"
     Write-Both "Failed:    $(@($Failed).Count)" "INFO"
     Write-Both "No pass:   $(@($NoPassword).Count)" "INFO"
+    Write-Both "Elapsed:   $($totalStopwatch.Elapsed.ToString('hh\:mm\:ss'))" "INFO"
     Write-Both "" "INFO"
 
     if (@($Failed).Count -gt 0) {
@@ -1451,7 +1493,7 @@ try {
         $edit = Read-YesNo "Open password list now?" $false
 
         if ($edit) {
-            notepad.exe $PwFile
+            Start-Process notepad.exe -ArgumentList $PwFile
         }
     } else {
         Write-Both "All archives completed successfully." "INFO" "Green"
@@ -1479,11 +1521,13 @@ try {
     if ($ClearClipboardOnExit -and $lastCopiedPassword -and $PSVersionTable.PSVersion.Major -ge 5) {
         try {
             $current = Get-Clipboard -ErrorAction SilentlyContinue
-            if ($current -eq $lastCopiedPassword) {
+            if ($null -ne $current -and $current -eq $lastCopiedPassword) {
                 Set-Clipboard -Value ""
                 Write-Log "Clipboard cleared."
             }
-        } catch {}
+        } catch {
+            Write-Log "Could not clear clipboard: $($_.Exception.Message)" "WARN"
+        }
     }
 
     exit 0
@@ -1501,65 +1545,7 @@ catch {
 Set-Content -LiteralPath $HelperPath -Value $HelperScript -Encoding UTF8
 
 # ============================================================
-# Uninstaller
-# ============================================================
-
-$UninstallScript = @'
-$ErrorActionPreference = "SilentlyContinue"
-
-$archiveExtensions = @(
-    ".zip",
-    ".zipx",
-    ".7z",
-    ".rar",
-    ".001",
-    ".tar",
-    ".gz",
-    ".tgz",
-    ".bz2",
-    ".tbz2",
-    ".xz",
-    ".txz",
-    ".zst",
-    ".tzst",
-    ".cab",
-    ".iso",
-    ".wim",
-    ".img",
-    ".dmg"
-)
-
-foreach ($ext in $archiveExtensions) {
-    Remove-Item -Path "HKCU:\Software\Classes\SystemFileAssociations\$ext\shell\ArchivePwExtract" -Recurse -Force
-}
-
-Remove-Item -Path "HKCU:\Software\Classes\Directory\shell\ArchivePwExtractFolder" -Recurse -Force
-Remove-Item -Path "HKCU:\Software\Classes\Directory\Background\shell\ArchivePwExtractHere" -Recurse -Force
-Remove-Item -Path "HKCU:\Software\Classes\Directory\Background\shell\ArchivePwEditPasswords" -Recurse -Force
-
-$sendTo = [Environment]::GetFolderPath("SendTo")
-Remove-Item -Path (Join-Path $sendTo "Archive password-list extract.lnk") -Force
-
-Write-Host ""
-Write-Host "Removed right-click and Send To menu entries." -ForegroundColor Green
-Write-Host ""
-Write-Host "Your password file was NOT deleted:"
-$_docs = [Environment]::GetFolderPath("MyDocuments")
-if ([string]::IsNullOrEmpty($_docs)) { $_docs = Join-Path $env:USERPROFILE "Documents" }
-Write-Host (Join-Path (Join-Path $_docs "ArchivePwExtract") "passwords.txt")
-Write-Host ""
-Write-Host "Helper folder was NOT deleted:"
-Write-Host "$env:LOCALAPPDATA\ArchivePwExtract"
-Write-Host ""
-Read-Host "Press Enter to close"
-'@
-
-Set-Content -LiteralPath $UninstallPath -Value $UninstallScript -Encoding UTF8
-
-# ============================================================
-# Context menus
-# NOTE: On Windows 11, these entries appear under "Show more options"
-# (the classic right-click menu). Use Shift+Right-click to access directly.
+# Shared extension list for context menus and uninstaller
 # ============================================================
 
 $ArchiveExtensions = @(
@@ -1583,6 +1569,52 @@ $ArchiveExtensions = @(
     ".img",
     ".dmg"
 )
+
+# ============================================================
+# Uninstaller
+# ============================================================
+
+$extArrayString = ($ArchiveExtensions | ForEach-Object { "    `"$_`"" }) -join ",`n"
+
+$UninstallScript = @"
+`$ErrorActionPreference = "SilentlyContinue"
+
+`$archiveExtensions = @(
+$extArrayString
+)
+
+foreach (`$ext in `$archiveExtensions) {
+    Remove-Item -Path "HKCU:\Software\Classes\SystemFileAssociations\`$ext\shell\ArchivePwExtract" -Recurse -Force
+}
+
+Remove-Item -Path "HKCU:\Software\Classes\Directory\shell\ArchivePwExtractFolder" -Recurse -Force
+Remove-Item -Path "HKCU:\Software\Classes\Directory\Background\shell\ArchivePwExtractHere" -Recurse -Force
+Remove-Item -Path "HKCU:\Software\Classes\Directory\Background\shell\ArchivePwEditPasswords" -Recurse -Force
+
+`$sendTo = [Environment]::GetFolderPath("SendTo")
+Remove-Item -Path (Join-Path `$sendTo "Archive password-list extract.lnk") -Force
+
+Write-Host ""
+Write-Host "Removed right-click and Send To menu entries." -ForegroundColor Green
+Write-Host ""
+Write-Host "Your password file was NOT deleted:"
+`$_docs = [Environment]::GetFolderPath("MyDocuments")
+if ([string]::IsNullOrEmpty(`$_docs)) { `$_docs = Join-Path `$env:USERPROFILE "Documents" }
+Write-Host (Join-Path (Join-Path `$_docs "ArchivePwExtract") "passwords.txt")
+Write-Host ""
+Write-Host "Helper folder was NOT deleted:"
+Write-Host "`$env:LOCALAPPDATA\ArchivePwExtract"
+Write-Host ""
+Read-Host "Press Enter to close"
+"@
+
+Set-Content -LiteralPath $UninstallPath -Value $UninstallScript -Encoding UTF8
+
+# ============================================================
+# Context menus
+# NOTE: On Windows 11, these entries appear under "Show more options"
+# (the classic right-click menu). Use Shift+Right-click to access directly.
+# ============================================================
 
 foreach ($Ext in $ArchiveExtensions) {
     $MenuPath = "HKCU:\Software\Classes\SystemFileAssociations\$Ext\shell\ArchivePwExtract"
@@ -1678,7 +1710,7 @@ Write-Host ""
 Write-Host "On Windows 11, context menu entries appear under 'Show more options'."
 Write-Host ""
 Write-Host "Opening password list now..."
-notepad.exe $PwFile
+Start-Process notepad.exe -ArgumentList $PwFile
 
 Write-Host ""
 Read-Host "Press Enter to close"
