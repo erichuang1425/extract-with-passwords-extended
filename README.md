@@ -4,28 +4,38 @@ Windows context-menu tool for extracting encrypted archives using a password lis
 
 ## Features
 
+### Core
 - **Multi-engine support** — 7-Zip, WinRAR/UnRAR, and PeaZip's bundled 7z with automatic fallback chain
 - **Windows context menu integration** — right-click any archive to extract with password list
 - **Batch folder processing** — right-click a folder to scan and extract all archives inside
-- **Format-aware password testing** — non-encryption formats (tar, gz, cab, iso, etc.) skip password cycling entirely and extract directly
-- **Header-based encryption detection** — inspects archive headers to skip password cycling on unencrypted .zip/.rar/.7z files
-- **Test-only-then-extract** — finds the correct password via lightweight test commands, then extracts once (faster than test+extract per password)
-- **Password cache** — remembers successful passwords across sessions; tries cached passwords first
-- **Session-local password reordering** — when batch-extracting, the last successful password is tried first on the next archive
-- **Multiple password files** — optionally load passwords from all .txt files in the password directory
-- **Split/multi-volume archive support** — `.001`, `.part01.rar`, and other split formats auto-detected with volume completeness validation
-- **Large archive strategies** — detects large archives and adjusts strategy to avoid repeated disk writes
-- **Custom output directory** — configurable default extraction destination
-- **External JSON configuration** — settings stored in `config.json` that survive reinstalls
-- **Masked password display** — found passwords are masked in console output by default; full password copied to clipboard with auto-clear
+- **Format-aware password testing** — non-encryption formats (tar, gz, cab, iso, etc.) skip password cycling entirely
+- **Header-based encryption detection** — inspects archive headers to skip password cycling on unencrypted archives
+- **Test-only-then-extract** — finds the correct password via lightweight test commands, then extracts once
+- **Error classification** — distinguishes wrong password vs corrupt archive vs timeout vs missing volume
+
+### GUI
+- **WPF GUI mode** — native Windows GUI with archive list, dual progress bars, live log viewer, and drag-and-drop
 - **Interactive browse interface** — file/folder browser when launched without arguments
 - **Toast notifications** — Windows notification when batch extraction completes
+
+### Performance
+- **Parallel archive processing** — process multiple archives concurrently via runspace pools
+- **Parallel password testing** — test multiple passwords simultaneously against a single archive
+- **Password cache** — remembers successful passwords across sessions; tries cached passwords first
+- **Session-local password reordering** — last successful password is tried first on the next archive
+- **Large archive strategies** — detects large archives and adjusts strategy to avoid repeated disk writes
+
+### Logging
+- **Condensed logging** — suppresses repetitive "Wrong password" errors from engine output into a single summary line
+- **Structured per-attempt logs** — one line per password attempt instead of full engine dumps
+- **Verbose mode** — `verboseEngineLogging` config option restores full engine output when needed
+
+### Other
+- **Modular architecture** — 8 separate module files for maintainability
+- **Split/multi-volume archive support** — `.001`, `.part01.rar`, and other split formats with volume validation
+- **External JSON configuration** — settings stored in `config.json` that survive reinstalls
+- **Masked password display** — found passwords are masked in console output by default
 - **Send To shortcut** — drag-and-drop archives via the Windows Send To menu
-- **Windows 11 classic menu opt-in** — installer offers to restore the classic right-click menu
-- **Engine validation** — smoke-tests detected engines before use to avoid broken installations
-- **Locked file detection** — checks if archives are accessible before attempting extraction
-- **ETA reporting** — progress bar with estimated time remaining during password testing
-- **Detailed logging** — every run produces a timestamped diagnostic log with partial output on timeouts
 - **Robust installer** — reports which context menu registrations succeeded or failed
 
 ## Requirements
@@ -39,17 +49,36 @@ Windows context-menu tool for extracting encrypted archives using a password lis
 
 ## Installation
 
-1. Download `Install-ArchivePwExtract.ps1`
-2. Right-click the file and select **Run with PowerShell**
+1. Download and extract the release ZIP (or clone this repository)
+2. Right-click `Install-ArchivePwExtract.ps1` and select **Run with PowerShell**
    - Or run from a PowerShell prompt: `powershell -ExecutionPolicy Bypass -File Install-ArchivePwExtract.ps1`
 3. The installer will:
-   - Create the helper script at `%LOCALAPPDATA%\ArchivePwExtract\TryPwExtract.ps1`
+   - Copy the orchestrator and 8 module files to `%LOCALAPPDATA%\ArchivePwExtract\`
+   - Copy the WPF GUI resources
    - Create a default `config.json` (if one doesn't exist)
    - Register Windows Explorer context menu entries for all supported archive types
    - Create a Send To shortcut
    - Create a password list template (if one doesn't exist) and open it in Notepad
    - On Windows 11: optionally restore the classic right-click menu
    - Display a registration summary showing which steps succeeded
+
+### Project structure
+
+```
+Install-ArchivePwExtract.ps1    # Installer (run this)
+TryPwExtract.ps1                # Main orchestrator
+Modules/
+  Config.ps1                    # Configuration defaults and JSON reader
+  Logging.ps1                   # Log writing, process invocation, output condensing
+  ConsoleUI.ps1                 # Console formatting, progress bars, interactive menu
+  ArchiveUtils.ps1              # Archive detection, validation, output management
+  Extraction.ps1                # Engine detection, test/extract, error classification
+  Passwords.ps1                 # Password loading, caching, deduplication
+  Parallel.ps1                  # Runspace pool management for concurrency
+  WpfGui.ps1                    # WPF GUI window management
+Resources/
+  MainWindow.xaml               # WPF window layout definition
+```
 
 ## Usage
 
@@ -77,6 +106,7 @@ Double-click the helper script or run it without arguments to get an interactive
 - Edit password list
 - Open settings
 - View recent logs
+- Launch GUI mode
 
 ### Password file location
 
@@ -130,6 +160,10 @@ Settings are stored in `%LOCALAPPDATA%\ArchivePwExtract\config.json` and survive
 | `showToastNotification` | `true` | Show Windows toast notification on batch completion |
 | `largeArchiveThresholdMB` | `500` | Archives above this size trigger large archive mode |
 | `skipTestExtractFallbackForLargeArchives` | `true` | Skip extract fallback for large archives when test fails |
+| `verboseEngineLogging` | `false` | Log full engine output instead of condensed summaries |
+| `maxParallelArchives` | `1` | Number of archives to process concurrently (1 = sequential) |
+| `maxParallelPasswords` | `1` | Number of passwords to test concurrently per archive |
+| `preferGui` | `false` | Launch WPF GUI instead of console mode (requires PS 5.1+) |
 
 ## Supported Formats
 
@@ -188,6 +222,10 @@ For encryption-capable formats (.zip, .rar, .7z), the script inspects the archiv
 
 Archives above the configured threshold (default 500 MB) skip the extract-even-if-test-fails fallback to avoid expensive failed extraction attempts.
 
+### Parallel processing
+
+Set `maxParallelArchives` > 1 to process multiple archives concurrently using PowerShell runspace pools. Set `maxParallelPasswords` > 1 to test multiple passwords simultaneously against each archive. Both use cancellation tokens to stop work as soon as a match is found. Start with conservative values (2-4) to avoid I/O saturation.
+
 ## Known Limitations
 
 - **PeaZip Password Manager**: The script cannot read passwords saved in PeaZip's built-in Password Manager. If PeaZip opens a failed archive using a saved password, copy that password into your password list file.
@@ -214,7 +252,7 @@ Diagnostic logs are saved to:
 %LOCALAPPDATA%\ArchivePwExtract\Logs\
 ```
 
-Each run creates a timestamped log file with full command-line output from extraction engines (passwords are redacted in logs). Process timeouts capture partial output for diagnostic purposes.
+Each run creates a timestamped log file. By default, repetitive engine errors (like "Wrong password" repeated per file) are condensed into a single summary line. Set `verboseEngineLogging` to `true` in config.json to restore full engine output. Passwords are always redacted in logs.
 
 ## License
 
