@@ -1,0 +1,260 @@
+# Logging.ps1 — Log writing, argument redaction, and process invocation with output capture
+
+function Write-Log {
+    param(
+        [string]$Message,
+        [string]$Level = "INFO"
+    )
+
+    $line = "[{0}] [{1}] {2}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss.fff"), $Level, $Message
+    Add-Content -LiteralPath $RunLogPath -Value $line -Encoding UTF8
+}
+
+function Write-Both {
+    param(
+        [string]$Message,
+        [string]$Level = "INFO",
+        [string]$Color = ""
+    )
+
+    if ($Color) {
+        Write-Host $Message -ForegroundColor $Color
+    } else {
+        Write-Host $Message
+    }
+
+    Write-Log -Message $Message -Level $Level
+}
+
+function Redact-ArgsForLog {
+    param([object[]]$ArgumentList)
+
+    $safe = @()
+    $redactNext = $false
+
+    foreach ($a in @($ArgumentList)) {
+        $s = [string]$a
+
+        if ($redactNext) {
+            $safe += "********"
+            $redactNext = $false
+            continue
+        }
+
+        if ($s -eq '-p' -or $s -eq '-hp') {
+            $safe += $s
+            $redactNext = $true
+        } elseif ($s -match '^-hp.+') {
+            $safe += "-hp********"
+        } elseif ($s -match '^-p.+') {
+            $safe += "-p********"
+        } else {
+            $safe += $s
+        }
+    }
+
+    return ($safe -join " ")
+}
+
+function ConvertTo-WindowsCommandLineArg {
+    param([AllowNull()][string]$Argument)
+
+    if ($null -eq $Argument) {
+        return '""'
+    }
+
+    if ($Argument -eq '') {
+        return '""'
+    }
+
+    $needsQuoting = $false
+    if ($Argument.Contains(' ') -or $Argument.Contains('"') -or $Argument.Contains("`t")) {
+        $needsQuoting = $true
+    }
+
+    if (-not $needsQuoting) {
+        return $Argument
+    }
+
+    $sb = New-Object System.Text.StringBuilder
+    [void]$sb.Append('"')
+    $backslashCount = 0
+
+    for ($i = 0; $i -lt $Argument.Length; $i++) {
+        $c = $Argument[$i]
+
+        if ($c -eq '\') {
+            $backslashCount++
+        } elseif ($c -eq '"') {
+            [void]$sb.Append('\', $backslashCount * 2 + 1)
+            [void]$sb.Append('"')
+            $backslashCount = 0
+        } else {
+            if ($backslashCount -gt 0) {
+                [void]$sb.Append('\', $backslashCount)
+                $backslashCount = 0
+            }
+            [void]$sb.Append($c)
+        }
+    }
+
+    if ($backslashCount -gt 0) {
+        [void]$sb.Append('\', $backslashCount * 2)
+    }
+
+    [void]$sb.Append('"')
+    return $sb.ToString()
+}
+
+function Invoke-ProcessLogged {
+    param(
+        [string]$Exe,
+        [object[]]$ArgumentList,
+        [string]$Operation,
+        [bool]$ShowOutput = $false,
+        [int]$TimeoutSeconds = 0,
+        [bool]$CondenseOutput = $false
+    )
+
+    $argArray = @()
+    foreach ($a in @($ArgumentList)) {
+        if ($null -ne $a) {
+            $argArray += [string]$a
+        }
+    }
+
+    Write-Log "Operation: $Operation"
+    Write-Log "Executable: $Exe"
+    Write-Log ("Args: " + (Redact-ArgsForLog -ArgumentList $argArray))
+
+    $output = @()
+    $exitCode = -999
+
+    try {
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = $Exe
+        $psi.UseShellExecute = $false
+        $psi.RedirectStandardOutput = $true
+        $psi.RedirectStandardError = $true
+        $psi.RedirectStandardInput = $true
+        $psi.CreateNoWindow = $true
+
+        $quotedArgs = @()
+        foreach ($arg in $argArray) {
+            $quotedArgs += (ConvertTo-WindowsCommandLineArg -Argument $arg)
+        }
+        $psi.Arguments = ($quotedArgs -join " ")
+
+        $p = New-Object System.Diagnostics.Process
+        $p.StartInfo = $psi
+
+        [void]$p.Start()
+
+        $stdoutTask = $p.StandardOutput.ReadToEndAsync()
+        $stderrTask = $p.StandardError.ReadToEndAsync()
+
+        try { $p.StandardInput.Close() } catch {
+            Write-Log "Could not close stdin: $($_.Exception.Message)" "WARN"
+        }
+
+        if ($TimeoutSeconds -gt 0) {
+            $exited = $p.WaitForExit($TimeoutSeconds * 1000)
+
+            if (-not $exited) {
+                try { $p.Kill() } catch {
+                    Write-Log "Could not kill timed-out process: $($_.Exception.Message)" "WARN"
+                }
+                $exitCode = -998
+                $output = @("[TIMEOUT after ${TimeoutSeconds}s] Process timed out and was killed.")
+
+                try {
+                    if ($stdoutTask.Wait(3000)) {
+                        $partialOut = $stdoutTask.Result
+                        if ($partialOut) { $output += ($partialOut -split "`r?`n") }
+                    }
+                } catch {}
+                try {
+                    if ($stderrTask.Wait(3000)) {
+                        $partialErr = $stderrTask.Result
+                        if ($partialErr) { $output += ($partialErr -split "`r?`n") }
+                    }
+                } catch {}
+            } else {
+                $p.WaitForExit()
+                $exitCode = $p.ExitCode
+                $stdout = $stdoutTask.Result
+                $stderr = $stderrTask.Result
+                if ($stdout) { $output += ($stdout -split "`r?`n") }
+                if ($stderr) { $output += ($stderr -split "`r?`n") }
+            }
+        } else {
+            $p.WaitForExit()
+            $exitCode = $p.ExitCode
+            $stdout = $stdoutTask.Result
+            $stderr = $stderrTask.Result
+            if ($stdout) { $output += ($stdout -split "`r?`n") }
+            if ($stderr) { $output += ($stderr -split "`r?`n") }
+        }
+    } catch {
+        $exitCode = -999
+        $output = @($_.Exception.ToString())
+    }
+
+    Write-Log "Exit code: $exitCode"
+
+    if ($output -and @($output).Count -gt 0) {
+        if ($CondenseOutput -and -not $VerboseEngineLogging) {
+            $suppressPatterns = @("Wrong password", "Data Error", "CRC Failed", "Checksum error", "ERROR: Data Error", "ERROR: Wrong password")
+            $suppressedCount = 0
+            $suppressedType = ""
+            $keptLines = @()
+
+            foreach ($line in @($output)) {
+                $text = [string]$line
+                $suppressed = $false
+                foreach ($pattern in $suppressPatterns) {
+                    if ($text -match [regex]::Escape($pattern)) {
+                        $suppressedCount++
+                        if (-not $suppressedType) { $suppressedType = $pattern }
+                        $suppressed = $true
+                        break
+                    }
+                }
+                if (-not $suppressed -and $text.Trim()) {
+                    $keptLines += $text
+                }
+            }
+
+            Write-Log "Output begin (condensed)"
+            foreach ($kl in $keptLines) {
+                Add-Content -LiteralPath $RunLogPath -Value $kl -Encoding UTF8
+                if ($ShowOutput) { Write-Host $kl }
+            }
+            if ($suppressedCount -gt 0) {
+                $summaryMsg = "[ENGINE] $suppressedType ($suppressedCount repetitive error lines suppressed)"
+                Write-Log $summaryMsg
+            }
+            Write-Log "Output end"
+        } else {
+            Write-Log "Output begin"
+
+            foreach ($line in @($output)) {
+                $text = [string]$line
+                Add-Content -LiteralPath $RunLogPath -Value $text -Encoding UTF8
+
+                if ($ShowOutput -and $text.Trim()) {
+                    Write-Host $text
+                }
+            }
+
+            Write-Log "Output end"
+        }
+    } else {
+        Write-Log "Output: <empty>"
+    }
+
+    return @{
+        ExitCode = $exitCode
+        Output = $output
+    }
+}

@@ -1,0 +1,141 @@
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Archive Password Extractor" Height="680" Width="820"
+        WindowStartupLocation="CenterScreen" Background="#1e1e2e">
+    <Window.Resources>
+        <Style TargetType="Button">
+            <Setter Property="Background" Value="#313244"/>
+            <Setter Property="Foreground" Value="#cdd6f4"/>
+            <Setter Property="BorderBrush" Value="#45475a"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="12,6"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="4" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter Property="Background" Value="#45475a"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter Property="Background" Value="#585b70"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.5"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style TargetType="DataGrid">
+            <Setter Property="Background" Value="#181825"/>
+            <Setter Property="Foreground" Value="#cdd6f4"/>
+            <Setter Property="BorderBrush" Value="#313244"/>
+            <Setter Property="RowBackground" Value="#1e1e2e"/>
+            <Setter Property="AlternatingRowBackground" Value="#181825"/>
+            <Setter Property="GridLinesVisibility" Value="Horizontal"/>
+            <Setter Property="HorizontalGridLinesBrush" Value="#313244"/>
+            <Setter Property="HeadersVisibility" Value="Column"/>
+        </Style>
+        <Style TargetType="ProgressBar">
+            <Setter Property="Background" Value="#313244"/>
+            <Setter Property="Foreground" Value="#89b4fa"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Height" Value="18"/>
+        </Style>
+    </Window.Resources>
+
+    <Grid Margin="12">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*" MinHeight="120"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="140"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- Toolbar -->
+        <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,8">
+            <Button Name="btnAddFiles" Content="Add Files" Margin="0,0,6,0"/>
+            <Button Name="btnAddFolder" Content="Add Folder" Margin="0,0,6,0"/>
+            <Button Name="btnClear" Content="Clear" Margin="0,0,6,0"/>
+            <Button Name="btnSettings" Content="Settings" Margin="0,0,6,0" HorizontalAlignment="Right"/>
+        </StackPanel>
+
+        <!-- Archive List -->
+        <DataGrid Grid.Row="1" Name="dgArchives" AutoGenerateColumns="False"
+                  IsReadOnly="True" SelectionMode="Single" CanUserReorderColumns="False"
+                  AllowDrop="True" Margin="0,0,0,8">
+            <DataGrid.Columns>
+                <DataGridTextColumn Header="#" Binding="{Binding Index}" Width="35">
+                    <DataGridTextColumn.ElementStyle>
+                        <Style TargetType="TextBlock">
+                            <Setter Property="Foreground" Value="#6c7086"/>
+                        </Style>
+                    </DataGridTextColumn.ElementStyle>
+                </DataGridTextColumn>
+                <DataGridTextColumn Header="Archive" Binding="{Binding Name}" Width="*">
+                    <DataGridTextColumn.ElementStyle>
+                        <Style TargetType="TextBlock">
+                            <Setter Property="Foreground" Value="#cdd6f4"/>
+                        </Style>
+                    </DataGridTextColumn.ElementStyle>
+                </DataGridTextColumn>
+                <DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="100">
+                    <DataGridTextColumn.ElementStyle>
+                        <Style TargetType="TextBlock">
+                            <Setter Property="Foreground" Value="#a6adc8"/>
+                        </Style>
+                    </DataGridTextColumn.ElementStyle>
+                </DataGridTextColumn>
+                <DataGridTextColumn Header="Password" Binding="{Binding Password}" Width="100">
+                    <DataGridTextColumn.ElementStyle>
+                        <Style TargetType="TextBlock">
+                            <Setter Property="Foreground" Value="#a6e3a1"/>
+                        </Style>
+                    </DataGridTextColumn.ElementStyle>
+                </DataGridTextColumn>
+                <DataGridTextColumn Header="Time" Binding="{Binding Time}" Width="70">
+                    <DataGridTextColumn.ElementStyle>
+                        <Style TargetType="TextBlock">
+                            <Setter Property="Foreground" Value="#6c7086"/>
+                        </Style>
+                    </DataGridTextColumn.ElementStyle>
+                </DataGridTextColumn>
+            </DataGrid.Columns>
+        </DataGrid>
+
+        <!-- Progress -->
+        <StackPanel Grid.Row="2" Margin="0,0,0,8">
+            <TextBlock Name="txtOverallProgress" Text="Ready" Foreground="#a6adc8" FontSize="12" Margin="0,0,0,4"/>
+            <ProgressBar Name="pbOverall" Value="0" Maximum="100"/>
+            <TextBlock Name="txtCurrentProgress" Text="" Foreground="#6c7086" FontSize="11" Margin="0,4,0,2"/>
+            <ProgressBar Name="pbCurrent" Value="0" Maximum="100"/>
+        </StackPanel>
+
+        <!-- Log Output -->
+        <Border Grid.Row="3" Background="#181825" BorderBrush="#313244" BorderThickness="1" CornerRadius="4" Margin="0,0,0,8">
+            <ScrollViewer Name="svLog" VerticalScrollBarVisibility="Auto">
+                <TextBlock Name="txtLog" Foreground="#a6adc8" FontFamily="Consolas" FontSize="11"
+                           TextWrapping="Wrap" Padding="8"/>
+            </ScrollViewer>
+        </Border>
+
+        <!-- Action Bar -->
+        <StackPanel Grid.Row="4" Orientation="Horizontal">
+            <Button Name="btnStart" Content="Start Extraction" Background="#313244" Foreground="#a6e3a1"
+                    BorderBrush="#a6e3a1" Margin="0,0,6,0" FontWeight="SemiBold"/>
+            <Button Name="btnCancel" Content="Cancel" Foreground="#f38ba8" BorderBrush="#f38ba8"
+                    IsEnabled="False" Margin="0,0,6,0"/>
+            <Button Name="btnOpenOutput" Content="Open Output" IsEnabled="False" Margin="0,0,6,0"/>
+        </StackPanel>
+    </Grid>
+</Window>
