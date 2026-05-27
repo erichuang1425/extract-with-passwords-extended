@@ -92,7 +92,7 @@ try {
     }
 
     # Interactive browse menu when launched without arguments
-    if (!$InputPaths -or $InputPaths.Count -eq 0) {
+    if (-not $launchGui -and (!$InputPaths -or $InputPaths.Count -eq 0)) {
         $selectedPaths = Show-InteractiveMenu
         if ($selectedPaths -and $selectedPaths.Count -gt 0) {
             if ($selectedPaths[0] -eq "__GUI_MODE__") {
@@ -357,7 +357,7 @@ try {
 
         $totalStopwatch.Stop()
 
-        $Succeeded = @($parallelResults | Where-Object { $_.Status -eq "Succeeded" } | ForEach-Object { $_.Archive })
+        $Succeeded = @($parallelResults | Where-Object { $_.Status -eq "Succeeded" -or $_.Status -eq "NoPassword" } | ForEach-Object { $_.Archive })
         $Failed = @($parallelResults | Where-Object { $_.Status -eq "Failed" } | ForEach-Object { $_.Archive })
         $NoPassword = @($parallelResults | Where-Object { $_.Status -eq "NoPassword" } | ForEach-Object { $_.Archive })
         $OutputFolders = @($parallelResults | Where-Object { $_.OutputDir } | ForEach-Object { $_.OutputDir })
