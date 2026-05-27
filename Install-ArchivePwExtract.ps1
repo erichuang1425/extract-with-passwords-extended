@@ -350,19 +350,25 @@ function Invoke-ProcessLogged {
 
 function Pause-Close {
     Write-Host ""
-    Write-Host "Log file:" -ForegroundColor Cyan
+    Write-Host "    Log: " -ForegroundColor DarkGray -NoNewline
     Write-Host $RunLogPath
     Write-Host ""
-    Read-Host "Press Enter to close"
+    Read-Host "    Press Enter to close"
 }
 
 function Write-Section {
     param([string]$Text)
 
+    $width = 60
+    $pad = $width - 4
+    $textPad = $pad - $Text.Length
+    $leftPad = [math]::Floor($textPad / 2)
+    $rightPad = [math]::Ceiling($textPad / 2)
+
     Write-Host ""
-    Write-Host "============================================================" -ForegroundColor DarkGray
-    Write-Host $Text -ForegroundColor Cyan
-    Write-Host "============================================================" -ForegroundColor DarkGray
+    Write-Host ("+" + ("-" * ($width - 2)) + "+") -ForegroundColor DarkCyan
+    Write-Host ("|" + (" " * $leftPad) + " " + $Text + " " + (" " * $rightPad) + "|") -ForegroundColor Cyan
+    Write-Host ("+" + ("-" * ($width - 2)) + "+") -ForegroundColor DarkCyan
 
     Write-Log "============================================================"
     Write-Log $Text
@@ -382,6 +388,7 @@ function Read-YesNo {
     }
 
     while ($true) {
+        Write-Host "[?] " -ForegroundColor Magenta -NoNewline
         $answer = Read-Host "$Question$suffix"
         Write-Log "Prompt: $Question$suffix Answer: $answer"
 
@@ -394,9 +401,60 @@ function Read-YesNo {
             "yes" { return $true }
             "n" { return $false }
             "no" { return $false }
-            default { Write-Host "Please type Y or N." -ForegroundColor Yellow }
+            default { Write-Host "    Please type Y or N." -ForegroundColor Yellow }
         }
     }
+}
+
+function Write-Status {
+    param(
+        [string]$Message,
+        [string]$Type = "info"
+    )
+
+    switch ($Type) {
+        "success" { Write-Host "[+] " -ForegroundColor Green -NoNewline; Write-Host $Message -ForegroundColor Green }
+        "fail"    { Write-Host "[-] " -ForegroundColor Red -NoNewline; Write-Host $Message -ForegroundColor Red }
+        "warn"    { Write-Host "[!] " -ForegroundColor Yellow -NoNewline; Write-Host $Message -ForegroundColor Yellow }
+        "info"    { Write-Host "[*] " -ForegroundColor Cyan -NoNewline; Write-Host $Message }
+        "dim"     { Write-Host "    " -NoNewline; Write-Host $Message -ForegroundColor DarkGray }
+        default   { Write-Host "    " -NoNewline; Write-Host $Message }
+    }
+}
+
+function Write-ProgressBar {
+    param(
+        [int]$Current,
+        [int]$Total,
+        [int]$Width = 30
+    )
+
+    if ($Total -le 0) { return }
+    $pct = [math]::Min(100, [math]::Floor(($Current / $Total) * 100))
+    $filled = [math]::Floor(($Current / $Total) * $Width)
+    $empty = $Width - $filled
+    $bar = ("=" * $filled) + ("-" * $empty)
+
+    Write-Host "`r    [$bar] $pct% ($Current/$Total)" -NoNewline
+}
+
+function Format-FileSize {
+    param([long]$Bytes)
+
+    if ($Bytes -ge 1GB) { return "{0:N1} GB" -f ($Bytes / 1GB) }
+    if ($Bytes -ge 1MB) { return "{0:N1} MB" -f ($Bytes / 1MB) }
+    if ($Bytes -ge 1KB) { return "{0:N1} KB" -f ($Bytes / 1KB) }
+    return "$Bytes B"
+}
+
+function Format-Elapsed {
+    param([System.Diagnostics.Stopwatch]$Stopwatch)
+
+    $ts = $Stopwatch.Elapsed
+    if ($ts.TotalMinutes -ge 1) {
+        return "{0}m {1}s" -f [math]::Floor($ts.TotalMinutes), $ts.Seconds
+    }
+    return "{0:N1}s" -f $ts.TotalSeconds
 }
 
 # ============================================================
@@ -1147,15 +1205,26 @@ try {
 
     Write-Log "============================================================"
 
-    Write-Both "Archive password-list extractor - multi engine patched" "INFO" "Cyan"
-    Write-Both "------------------------------------------------------" "INFO"
+    Write-Host ""
+    Write-Host "  +------------------------------------------------------+" -ForegroundColor DarkCyan
+    Write-Host "  |                                                      |" -ForegroundColor DarkCyan
+    Write-Host "  |" -ForegroundColor DarkCyan -NoNewline
+    Write-Host "     Archive Password-List Extractor" -ForegroundColor White -NoNewline
+    Write-Host "               |" -ForegroundColor DarkCyan
+    Write-Host "  |" -ForegroundColor DarkCyan -NoNewline
+    Write-Host "         Multi-Engine  |  v2.0" -ForegroundColor DarkGray -NoNewline
+    Write-Host "                      |" -ForegroundColor DarkCyan
+    Write-Host "  |                                                      |" -ForegroundColor DarkCyan
+    Write-Host "  +------------------------------------------------------+" -ForegroundColor DarkCyan
+    Write-Host ""
+    Write-Log "Archive password-list extractor - multi engine patched"
     Write-Both "" "INFO"
-    Write-Both "Log file:" "INFO" "Cyan"
-    Write-Both $RunLogPath "INFO"
+    Write-Status "Log: $RunLogPath" "dim"
     Write-Both "" "INFO"
 
     if (!$InputPaths -or $InputPaths.Count -eq 0) {
-        Write-Both "No files or folders were passed to the script." "ERROR" "Red"
+        Write-Status "No files or folders were passed to the script." "fail"
+        Write-Log "No input paths." "ERROR"
         Pause-Close
         exit 1
     }
@@ -1164,10 +1233,22 @@ try {
     $PeaZip7z = Get-PeaZipBundledSevenZipPath
     $WinRar = Get-WinRarOrUnRarPath
 
-    Write-Both "Detected engines:" "INFO" "Cyan"
-    Write-Both "7-Zip:             $SevenZip" "INFO"
-    Write-Both "WinRAR/UnRAR:      $WinRar" "INFO"
-    Write-Both "PeaZip bundled 7z: $PeaZip7z" "INFO"
+    Write-Status "Detected engines:" "info"
+    if ($SevenZip) {
+        Write-Host "    [" -NoNewline; Write-Host "OK" -ForegroundColor Green -NoNewline; Write-Host "] 7-Zip             $SevenZip"
+    } else {
+        Write-Host "    [" -NoNewline; Write-Host "--" -ForegroundColor DarkGray -NoNewline; Write-Host "] 7-Zip             " -NoNewline; Write-Host "not found" -ForegroundColor DarkGray
+    }
+    if ($WinRar) {
+        Write-Host "    [" -NoNewline; Write-Host "OK" -ForegroundColor Green -NoNewline; Write-Host "] WinRAR/UnRAR      $WinRar"
+    } else {
+        Write-Host "    [" -NoNewline; Write-Host "--" -ForegroundColor DarkGray -NoNewline; Write-Host "] WinRAR/UnRAR      " -NoNewline; Write-Host "not found" -ForegroundColor DarkGray
+    }
+    if ($PeaZip7z) {
+        Write-Host "    [" -NoNewline; Write-Host "OK" -ForegroundColor Green -NoNewline; Write-Host "] PeaZip bundled 7z $PeaZip7z"
+    } else {
+        Write-Host "    [" -NoNewline; Write-Host "--" -ForegroundColor DarkGray -NoNewline; Write-Host "] PeaZip bundled 7z " -NoNewline; Write-Host "not found" -ForegroundColor DarkGray
+    }
     Write-Both "" "INFO"
 
     Write-Log "Detected 7-Zip: $SevenZip"
@@ -1175,8 +1256,8 @@ try {
     Write-Log "Detected PeaZip bundled 7z: $PeaZip7z"
 
     if (-not $SevenZip -and -not $PeaZip7z -and -not $WinRar) {
-        Write-Both "No extraction engine found." "ERROR" "Red"
-        Write-Both "Install 7-Zip, WinRAR, or PeaZip." "ERROR"
+        Write-Status "No extraction engine found. Install 7-Zip, WinRAR, or PeaZip." "fail"
+        Write-Log "No extraction engine found." "ERROR"
         Pause-Close
         exit 1
     }
@@ -1191,39 +1272,50 @@ try {
     $Skipped = @($result.Skipped)
 
     if ($Archives.Count -eq 0) {
-        Write-Both "No supported archive entry files found." "ERROR" "Red"
+        Write-Status "No supported archive entry files found." "fail"
+        Write-Log "No supported archive entry files found." "ERROR"
         Pause-Close
         exit 1
     }
 
-    Write-Both "Password list:" "INFO"
-    Write-Both $PwFile "INFO"
+    Write-Status "Password list: $PwFile" "dim"
     Write-Both "" "INFO"
-    Write-Both "Output behavior:" "INFO" "Cyan"
+    Write-Status "Output behavior:" "info"
     switch ($ExistingOutputBehavior.ToLowerInvariant()) {
-        "replace" { Write-Both "Existing extracted folders will be REPLACED." "INFO" }
-        "merge"   { Write-Both "Existing extracted folders will be MERGED (files overwritten)." "INFO" }
-        "new"     { Write-Both "Existing extracted folders will be kept; new _2/_3 folders created." "INFO" }
-        default   { Write-Both "Existing extracted folders will be REPLACED." "INFO" }
+        "replace" { Write-Status "Existing extracted folders will be REPLACED." "dim" }
+        "merge"   { Write-Status "Existing extracted folders will be MERGED (files overwritten)." "dim" }
+        "new"     { Write-Status "Existing extracted folders will be kept; new _2/_3 folders created." "dim" }
+        default   { Write-Status "Existing extracted folders will be REPLACED." "dim" }
     }
     Write-Both "" "INFO"
 
-    Write-Both "Found archive entry files:" "INFO"
+    Write-Status "Found $($Archives.Count) archive entry file(s):" "info"
     Write-Both "" "INFO"
 
     $i = 0
 
     foreach ($archive in $Archives) {
         $i++
-        Write-Both "[$i] $archive" "INFO"
+        $fileSize = ""
+        try {
+            $fi = Get-Item -LiteralPath $archive -ErrorAction SilentlyContinue
+            if ($fi) { $fileSize = " (" + (Format-FileSize $fi.Length) + ")" }
+        } catch {}
+        $indexStr = "$i".PadLeft(([string]$Archives.Count).Length)
+        Write-Host "    " -NoNewline
+        Write-Host "[$indexStr]" -ForegroundColor DarkCyan -NoNewline
+        Write-Host " $archive" -NoNewline
+        Write-Host $fileSize -ForegroundColor DarkGray
+        Write-Log "[$i] $archive"
     }
 
     if ($Skipped.Count -gt 0) {
         Write-Both "" "INFO"
-        Write-Both "Skipped unsupported or non-entry files:" "WARN" "DarkYellow"
+        Write-Status "Skipped $($Skipped.Count) unsupported or non-entry file(s):" "warn"
 
         foreach ($item in $Skipped) {
-            Write-Both "- $item" "WARN"
+            Write-Host "    - $item" -ForegroundColor DarkYellow
+            Write-Log "Skipped: $item" "WARN"
         }
     }
 
@@ -1282,7 +1374,8 @@ try {
     $Passwords = @(Get-Passwords)
 
     if ($Passwords.Count -eq 0) {
-        Write-Both "No passwords loaded and no-password testing is disabled." "ERROR" "Red"
+        Write-Status "No passwords loaded and no-password testing is disabled." "fail"
+        Write-Log "No passwords loaded." "ERROR"
         Pause-Close
         exit 1
     }
@@ -1297,24 +1390,21 @@ try {
     foreach ($Archive in $Archives) {
         $ArchiveIndex++
         $archiveStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-        Write-Section "[$ArchiveIndex/$($Archives.Count)] Processing"
-        Write-Both $Archive "INFO"
+        $archiveName = [IO.Path]::GetFileName($Archive)
+        Write-Section "[$ArchiveIndex/$($Archives.Count)] $archiveName"
+        Write-Status $Archive "dim"
         Write-Both "" "INFO"
 
         $enginePlan = @(Get-EnginePlanForArchive -Archive $Archive -SevenZip $SevenZip -PeaZip7z $PeaZip7z -WinRar $WinRar)
 
         if (@($enginePlan).Count -eq 0) {
-            Write-Both "No compatible engine for this archive." "ERROR" "Red"
+            Write-Status "No compatible engine for this archive." "fail"
+            Write-Log "No compatible engine for this archive." "ERROR"
             $Failed += $Archive
             continue
         }
 
-        Write-Both "Engine plan:" "INFO" "Cyan"
-
-        foreach ($e in $enginePlan) {
-            Write-Both "- $($e.Name): $($e.Path)" "INFO"
-        }
-
+        Write-Status "Engines: $(($enginePlan | ForEach-Object { $_.Name }) -join ', ')" "info"
         Write-Both "" "INFO"
 
         $archiveDir = Split-Path $Archive -Parent
@@ -1333,10 +1423,12 @@ try {
         $isEncryptable = Test-IsEncryptionCapable $Archive
 
         if (-not $isEncryptable) {
-            Write-Both "Format does not support encryption; extracting directly..." "INFO"
+            Write-Status "Format does not support encryption; extracting directly..." "info"
 
             foreach ($engine in $enginePlan) {
-                Write-Both "  Engine: $($engine.Name)" "INFO"
+                Write-Host "    Trying " -NoNewline -ForegroundColor DarkGray
+                Write-Host $engine.Name -NoNewline -ForegroundColor White
+                Write-Host "..." -ForegroundColor DarkGray
 
                 $ok = Try-EnginePassword `
                     -EngineName $engine.Name `
@@ -1349,12 +1441,11 @@ try {
                     -Timeout $ExtractionTimeoutSeconds
 
                 if ($ok) {
+                    $archiveStopwatch.Stop()
                     Write-Both "" "INFO"
-                    Write-Both "SUCCESS: no password required." "INFO" "Green"
-                    Write-Both "Engine used:" "INFO"
-                    Write-Both $engine.Name "INFO"
-                    Write-Both "Extracted to:" "INFO"
-                    Write-Both $outputDir "INFO"
+                    Write-Status "Extracted successfully (no password required)" "success"
+                    Write-Status "Engine: $($engine.Name)  |  Time: $(Format-Elapsed $archiveStopwatch)" "dim"
+                    Write-Status "Output: $outputDir" "dim"
                     $Succeeded += $Archive
                     $NoPassword += $Archive
                     $OutputFolders += $outputDir
@@ -1364,12 +1455,11 @@ try {
             }
 
             if (-not $found) {
+                $archiveStopwatch.Stop()
                 Write-Both "" "INFO"
-                Write-Both "FAILED: could not extract (corrupted, unsupported, or missing split part)." "ERROR" "Red"
-                Write-Both "Archive:" "ERROR"
-                Write-Both $Archive "ERROR"
-                Write-Both "Actual error details were written to:" "ERROR" "Yellow"
-                Write-Both $RunLogPath "ERROR" "Yellow"
+                Write-Status "FAILED: could not extract (corrupted, unsupported, or missing split part)" "fail"
+                Write-Status "See log: $RunLogPath" "dim"
+                Write-Log "FAILED: $Archive" "ERROR"
                 $Failed += $Archive
                 Remove-EmptyOutputDir -OutputDir $outputDir -SeparateFolders $SeparateFolders
             }
@@ -1380,18 +1470,20 @@ try {
         $totalPasswords = $Passwords.Count
         $passwordIndex = 0
 
+        Write-Status "Testing $totalPasswords password(s) across $(@($enginePlan).Count) engine(s)..." "info"
+
         foreach ($Pw in $Passwords) {
             $passwordIndex++
 
+            Write-ProgressBar -Current $passwordIndex -Total $totalPasswords
+
             if ($Pw -eq "") {
-                Write-Both "Trying without password [$passwordIndex/$totalPasswords]..." "INFO"
+                Write-Log "Trying without password [$passwordIndex/$totalPasswords]..."
             } else {
-                Write-Both "Trying password [$passwordIndex/$totalPasswords]..." "INFO"
+                Write-Log "Trying password [$passwordIndex/$totalPasswords]..."
             }
 
             foreach ($engine in $enginePlan) {
-                Write-Both "  Engine: $($engine.Name)" "INFO"
-
                 $ok = Try-EnginePassword `
                     -EngineName $engine.Name `
                     -EnginePath $engine.Path `
@@ -1402,18 +1494,21 @@ try {
                     -Timeout $ExtractionTimeoutSeconds
 
                 if ($ok) {
+                    Write-Host ""
+                    $archiveStopwatch.Stop()
                     Write-Both "" "INFO"
 
                     if ($Pw -eq "") {
-                        Write-Both "SUCCESS: no password required." "INFO" "Green"
+                        Write-Status "Extracted successfully (no password required)" "success"
                         $NoPassword += $Archive
                     } else {
-                        Write-Both "SUCCESS: found password." "INFO" "Green"
+                        Write-Status "Password found and extracted successfully" "success"
 
                         if ($ShowPasswordInConsole) {
-                            Write-Host $Pw
+                            Write-Host "    Password: $Pw" -ForegroundColor White
                         } else {
-                            Write-Host (Format-MaskedPassword $Pw)
+                            Write-Host "    Password: " -ForegroundColor DarkGray -NoNewline
+                            Write-Host (Format-MaskedPassword $Pw) -ForegroundColor White
                         }
 
                         Write-Log "SUCCESS: found password. Password redacted in log."
@@ -1422,19 +1517,17 @@ try {
                             try {
                                 $Pw | Set-Clipboard
                                 $lastCopiedPassword = $Pw
-                                Write-Both "Password copied to clipboard." "INFO"
+                                Write-Status "Password copied to clipboard" "dim"
                             } catch {
                                 Write-Log "Could not copy password to clipboard: $($_.Exception.Message)" "WARN"
                             }
                         } else {
-                            Write-Both "Clipboard copy requires PowerShell 5.0+; password not copied." "WARN" "DarkYellow"
+                            Write-Status "Clipboard copy requires PowerShell 5.0+" "warn"
                         }
                     }
 
-                    Write-Both "Engine used:" "INFO"
-                    Write-Both $engine.Name "INFO"
-                    Write-Both "Extracted to:" "INFO"
-                    Write-Both $outputDir "INFO"
+                    Write-Status "Engine: $($engine.Name)  |  Time: $(Format-Elapsed $archiveStopwatch)" "dim"
+                    Write-Status "Output: $outputDir" "dim"
 
                     $Succeeded += $Archive
                     $OutputFolders += $outputDir
@@ -1449,12 +1542,12 @@ try {
         }
 
         if (-not $found) {
+            Write-Host ""
+            $archiveStopwatch.Stop()
             Write-Both "" "INFO"
-            Write-Both "FAILED: no matching password, unsupported archive, missing split part, or damaged archive." "ERROR" "Red"
-            Write-Both "Archive:" "ERROR"
-            Write-Both $Archive "ERROR"
-            Write-Both "Actual error details were written to:" "ERROR" "Yellow"
-            Write-Both $RunLogPath "ERROR" "Yellow"
+            Write-Status "FAILED: no matching password or archive could not be extracted" "fail"
+            Write-Status "See log: $RunLogPath" "dim"
+            Write-Log "FAILED: $Archive" "ERROR"
             $Failed += $Archive
             Remove-EmptyOutputDir -OutputDir $outputDir -SeparateFolders $SeparateFolders
         }
@@ -1467,28 +1560,47 @@ try {
 
     Write-Section "Summary"
 
-    Write-Both "Succeeded: $(@($Succeeded).Count)" "INFO"
-    Write-Both "Failed:    $(@($Failed).Count)" "INFO"
-    Write-Both "No pass:   $(@($NoPassword).Count)" "INFO"
-    Write-Both "Elapsed:   $($totalStopwatch.Elapsed.ToString('hh\:mm\:ss'))" "INFO"
-    Write-Both "" "INFO"
+    $totalCount = $Archives.Count
+    $succCount = @($Succeeded).Count
+    $failCount = @($Failed).Count
+    $noPwCount = @($NoPassword).Count
+    $elapsed = $totalStopwatch.Elapsed.ToString('hh\:mm\:ss')
 
-    if (@($Failed).Count -gt 0) {
-        Write-Both "Failed archives:" "ERROR" "Red"
+    Write-Host ""
+    Write-Host "    Results" -ForegroundColor White
+    Write-Host "    -------" -ForegroundColor DarkGray
+
+    Write-Host "    Succeeded:    " -NoNewline
+    if ($succCount -gt 0) { Write-Host "$succCount / $totalCount" -ForegroundColor Green }
+    else { Write-Host "$succCount / $totalCount" -ForegroundColor DarkGray }
+
+    Write-Host "    Failed:       " -NoNewline
+    if ($failCount -gt 0) { Write-Host "$failCount / $totalCount" -ForegroundColor Red }
+    else { Write-Host "$failCount / $totalCount" -ForegroundColor Green }
+
+    Write-Host "    No password:  " -NoNewline
+    Write-Host "$noPwCount" -ForegroundColor DarkGray
+
+    Write-Host "    Total time:   " -NoNewline
+    Write-Host $elapsed -ForegroundColor White
+
+    Write-Host ""
+
+    Write-Log "Summary: Succeeded=$succCount Failed=$failCount NoPassword=$noPwCount Elapsed=$elapsed"
+
+    if ($failCount -gt 0) {
+        Write-Status "Failed archives:" "fail"
 
         foreach ($item in $Failed) {
-            Write-Both "- $item" "ERROR"
+            Write-Host "    - " -NoNewline -ForegroundColor Red
+            Write-Host $item
         }
 
-        Write-Both "" "INFO"
-        Write-Both "Important:" "INFO" "Yellow"
-        Write-Both "This script can use 7-Zip, WinRAR/UnRAR, and PeaZip's bundled 7z.exe." "INFO"
-        Write-Both "It cannot read PeaZip's saved Password Manager automatically." "INFO"
-        Write-Both "If PeaZip opens a failed archive because of a saved password, copy that password into:" "INFO"
-        Write-Both $PwFile "INFO"
-        Write-Both "" "INFO"
-        Write-Both "Actual diagnostic log:" "INFO" "Cyan"
-        Write-Both $RunLogPath "INFO"
+        Write-Host ""
+        Write-Status "Tip: Copy any known passwords into the password list file." "warn"
+        Write-Status "PeaZip's Password Manager cannot be read automatically." "dim"
+        Write-Status "Password file: $PwFile" "dim"
+        Write-Status "Diagnostic log: $RunLogPath" "dim"
 
         $edit = Read-YesNo "Open password list now?" $false
 
@@ -1496,9 +1608,8 @@ try {
             Start-Process notepad.exe -ArgumentList $PwFile
         }
     } else {
-        Write-Both "All archives completed successfully." "INFO" "Green"
-        Write-Both "Diagnostic log:" "INFO" "Cyan"
-        Write-Both $RunLogPath "INFO"
+        Write-Status "All $totalCount archive(s) completed successfully." "success"
+        Write-Status "Diagnostic log: $RunLogPath" "dim"
     }
 
     if ($OpenOutputAfterSuccess -and @($OutputFolders).Count -gt 0) {
@@ -1509,12 +1620,12 @@ try {
         }
     }
 
-    Write-Log "Run completed. Succeeded=$(@($Succeeded).Count) Failed=$(@($Failed).Count) NoPassword=$(@($NoPassword).Count)"
+    Write-Log "Run completed. Succeeded=$succCount Failed=$failCount NoPassword=$noPwCount"
     Write-Log "ArchivePwExtract run ended"
 
     if ($AlwaysShowFinalConfirmation) {
-        Write-Both "" "INFO"
-        Write-Both "Finished. Review the summary above." "INFO" "Cyan"
+        Write-Host ""
+        Write-Host "    Done." -ForegroundColor Cyan
         Pause-Close
     }
 
@@ -1533,9 +1644,8 @@ try {
     exit 0
 }
 catch {
-    Write-Both "" "INFO"
-    Write-Both "Error:" "ERROR" "Red"
-    Write-Both $_.Exception.Message "ERROR"
+    Write-Host ""
+    Write-Status "Fatal error: $($_.Exception.Message)" "fail"
     Write-Log "Fatal error: $($_.Exception.ToString())" "ERROR"
     Pause-Close
     exit 1
@@ -1682,35 +1792,27 @@ $Shortcut.IconLocation = "powershell.exe,0"
 $Shortcut.Save()
 
 Write-Host ""
-Write-Host "Installed successfully." -ForegroundColor Green
+Write-Host "  +------------------------------------------------------+" -ForegroundColor DarkCyan
+Write-Host "  |" -ForegroundColor DarkCyan -NoNewline
+Write-Host "              Installed Successfully" -ForegroundColor Green -NoNewline
+Write-Host "                |" -ForegroundColor DarkCyan
+Write-Host "  +------------------------------------------------------+" -ForegroundColor DarkCyan
 Write-Host ""
-Write-Host "Features:"
-Write-Host "- Robust argument quoting for spaces, quotes, and trailing backslashes."
-Write-Host "- Deadlock-safe process output capture."
-Write-Host "- WinRAR.exe fallback for supported archives; UnRAR.exe remains RAR-only."
-Write-Host "- Format-aware password testing: non-encryption formats skip password cycling."
-Write-Host "- 7-Zip password test only treats exit code 0 as a verified pass."
-Write-Host "- Warning exit code 1 requires newly extracted output."
-Write-Host "- Shared output cleanup will not delete previous successful extracts."
-Write-Host "- Masked password display with clipboard auto-clear."
+Write-Host "  Engines (tried in order):" -ForegroundColor Cyan
+Write-Host "    1. 7-Zip"
+Write-Host "    2. WinRAR (all formats) / UnRAR (RAR only)"
+Write-Host "    3. PeaZip bundled 7z"
 Write-Host ""
-Write-Host "Engines tried (in order):"
-Write-Host "1. 7-Zip"
-Write-Host "2. WinRAR.exe fallback for supported archives, or UnRAR.exe for RAR only"
-Write-Host "3. PeaZip bundled 7z fallback"
+Write-Host "  Key paths:" -ForegroundColor Cyan
+Write-Host "    Passwords:  " -NoNewline; Write-Host $PwFile -ForegroundColor White
+Write-Host "    Logs:       " -NoNewline; Write-Host $LogDir -ForegroundColor White
 Write-Host ""
-Write-Host "Important:"
-Write-Host "This cannot read PeaZip's saved Password Manager automatically."
-Write-Host "Passwords must be in:"
-Write-Host $PwFile
+Write-Host "  Notes:" -ForegroundColor Cyan
+Write-Host "    - PeaZip's saved Password Manager cannot be read automatically."
+Write-Host "    - On Windows 11, context menu entries appear under 'Show more options'."
 Write-Host ""
-Write-Host "Log folder:"
-Write-Host $LogDir
-Write-Host ""
-Write-Host "On Windows 11, context menu entries appear under 'Show more options'."
-Write-Host ""
-Write-Host "Opening password list now..."
+Write-Host "  Opening password list..." -ForegroundColor DarkGray
 Start-Process notepad.exe -ArgumentList $PwFile
 
 Write-Host ""
-Read-Host "Press Enter to close"
+Read-Host "  Press Enter to close"
