@@ -76,6 +76,8 @@ The helper script (`%LOCALAPPDATA%\ArchivePwExtract\TryPwExtract.ps1`) contains 
 | `$ClearClipboardOnExit` | `$true` | Clear clipboard when the script finishes |
 | `$OpenOutputAfterSuccess` | `$true` | Offer to open the output folder when done |
 | `$AlwaysShowFinalConfirmation` | `$true` | Show summary and wait for Enter before closing |
+| `$ExtractionTimeoutSeconds` | `300` | Per-process timeout in seconds (0 = no timeout) |
+| `$LogRetentionDays` | `30` | Auto-delete logs older than N days (0 = keep all) |
 
 ## Supported Formats
 
