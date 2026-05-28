@@ -83,7 +83,8 @@ function Write-ProgressBar {
         [int]$Current,
         [int]$Total,
         [int]$Width = 30,
-        [long]$ElapsedMs = 0
+        [long]$ElapsedMs = 0,
+        [string]$EngineName = ""
     )
 
     if ($Total -le 0) { return }
@@ -104,7 +105,12 @@ function Write-ProgressBar {
         }
     }
 
-    Write-Host "`r    [$bar] $pct% ($Current/$Total)$etaStr    " -NoNewline
+    $engineStr = ""
+    if ($EngineName) {
+        $engineStr = " [engine: $EngineName]"
+    }
+
+    Write-Host "`r    [$bar] $pct% ($Current/$Total)$etaStr$engineStr    " -NoNewline
 }
 
 function Format-FileSize {
