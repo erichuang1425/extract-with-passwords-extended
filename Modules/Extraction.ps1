@@ -357,30 +357,45 @@ function Get-EnginePlanForArchive {
 function Get-ExtractionErrorType {
     param(
         [int]$ExitCode,
-        [object[]]$Output
+        [object[]]$Output,
+        [bool]$ArchiveKnownEncrypted = $false
     )
 
-    if ($ExitCode -eq -998) { return "Timeout" }
-    if ($ExitCode -eq -999) { return "ProcessError" }
-    if ($ExitCode -eq 0) { return "Success" }
+    if ($ExitCode -eq -998) {
+        return [PSCustomObject]@{ Type = "Timeout"; Confidence = "High" }
+    }
+    if ($ExitCode -eq 0) {
+        return [PSCustomObject]@{ Type = "Success"; Confidence = "High" }
+    }
 
     $text = ($Output | ForEach-Object { [string]$_ }) -join "`n"
 
-    if ($text -match "Wrong password|Incorrect password|password is incorrect") {
-        return "WrongPassword"
-    }
-    if ($text -match "Unexpected end of archive|Headers Error|Unexpected end of data|is not supported archive") {
-        return "CorruptArchive"
-    }
-    if ($text -match "Cannot find volume|next volume is required|Missing volume") {
-        return "MissingVolume"
-    }
-    if ($text -match "Access is denied|locked by another process") {
-        return "PermissionDenied"
-    }
-    if ($text -match "CRC Failed|Data Error|Checksum error") {
-        return "WrongPassword"
+    if ($ExitCode -eq -999) {
+        if ($text -match "cannot find the file specified|The system cannot find the path|No such file") {
+            return [PSCustomObject]@{ Type = "MissingEngine"; Confidence = "High" }
+        }
+        return [PSCustomObject]@{ Type = "ProcessError"; Confidence = "High" }
     }
 
-    return "Unknown"
+    if ($text -match "Wrong password|Incorrect password|password is incorrect|Enter password") {
+        return [PSCustomObject]@{ Type = "WrongPassword"; Confidence = "High" }
+    }
+    if ($text -match "Cannot find volume|next volume is required|Missing volume") {
+        return [PSCustomObject]@{ Type = "MissingVolume"; Confidence = "High" }
+    }
+    if ($text -match "Access is denied|locked by another process") {
+        return [PSCustomObject]@{ Type = "PermissionDenied"; Confidence = "High" }
+    }
+    if ($text -match "Unexpected end of archive|Headers Error|Unexpected end of data|is not supported archive") {
+        return [PSCustomObject]@{ Type = "CorruptArchive"; Confidence = "High" }
+    }
+
+    if ($text -match "CRC Failed|Data Error|Checksum error") {
+        if ($ArchiveKnownEncrypted) {
+            return [PSCustomObject]@{ Type = "WrongPassword"; Confidence = "Low" }
+        }
+        return [PSCustomObject]@{ Type = "CorruptArchive"; Confidence = "Low" }
+    }
+
+    return [PSCustomObject]@{ Type = "Unknown"; Confidence = "Low" }
 }
