@@ -1,5 +1,37 @@
 # Passwords.ps1 — Password loading, caching, and deduplication
 
+function Get-FileEncoding {
+    param([string]$Path)
+
+    try {
+        $stream = [IO.File]::OpenRead($Path)
+        try {
+            $bom = New-Object byte[] 4
+            $read = $stream.Read($bom, 0, 4)
+
+            if ($read -ge 3 -and $bom[0] -eq 0xEF -and $bom[1] -eq 0xBB -and $bom[2] -eq 0xBF) {
+                return [Text.Encoding]::UTF8
+            }
+            if ($read -ge 4 -and $bom[0] -eq 0xFF -and $bom[1] -eq 0xFE -and $bom[2] -eq 0 -and $bom[3] -eq 0) {
+                return [Text.Encoding]::UTF32
+            }
+            if ($read -ge 4 -and $bom[0] -eq 0 -and $bom[1] -eq 0 -and $bom[2] -eq 0xFE -and $bom[3] -eq 0xFF) {
+                return New-Object System.Text.UTF32Encoding($true, $true)
+            }
+            if ($read -ge 2 -and $bom[0] -eq 0xFF -and $bom[1] -eq 0xFE) {
+                return [Text.Encoding]::Unicode
+            }
+            if ($read -ge 2 -and $bom[0] -eq 0xFE -and $bom[1] -eq 0xFF) {
+                return [Text.Encoding]::BigEndianUnicode
+            }
+        } finally {
+            $stream.Dispose()
+        }
+    } catch {}
+
+    return [Text.Encoding]::UTF8
+}
+
 function Get-CachedPasswords {
     if (-not $UsePasswordCache) { return @() }
     if (!(Test-Path -LiteralPath $CacheFile)) { return @() }
@@ -73,16 +105,23 @@ function Save-PasswordToCache {
 }
 
 function Get-Passwords {
-    $list = @()
+    $seen = @{}
+    $clean = New-Object System.Collections.Generic.List[string]
 
     $cached = @(Get-CachedPasswords)
     if ($cached.Count -gt 0) {
         Write-Log "Cached passwords loaded: $($cached.Count)"
-        $list += $cached
+        foreach ($pw in $cached) {
+            if (-not $seen.ContainsKey($pw)) {
+                $seen[$pw] = $true
+                [void]$clean.Add($pw)
+            }
+        }
     }
 
-    if ($TryNoPasswordFirst) {
-        $list += ""
+    if ($TryNoPasswordFirst -and -not $seen.ContainsKey("")) {
+        $seen[""] = $true
+        [void]$clean.Add("")
     }
 
     if (!(Test-Path -LiteralPath $PwFile)) {
@@ -102,29 +141,25 @@ function Get-Passwords {
     }
 
     foreach ($file in $filesToLoad) {
-        $raw = Get-Content -LiteralPath $file -Encoding UTF8 -ErrorAction SilentlyContinue
+        $encoding = Get-FileEncoding -Path $file
         $fileCount = 0
 
-        foreach ($line in $raw) {
-            $pw = $line.Trim()
+        try {
+            foreach ($line in [IO.File]::ReadLines($file, $encoding)) {
+                $pw = $line.Trim()
+                if ([string]::IsNullOrEmpty($pw)) { continue }
+                if ($pw.StartsWith("#")) { continue }
+                if ($seen.ContainsKey($pw)) { continue }
 
-            if ($pw -and -not $pw.StartsWith("#")) {
-                $list += $pw
+                $seen[$pw] = $true
+                [void]$clean.Add($pw)
                 $fileCount++
             }
+        } catch {
+            Write-Log "Failed to read password file $file : $($_.Exception.Message)" "WARN"
         }
 
-        Write-Log "Loaded $fileCount password(s) from $file"
-    }
-
-    $seen = @{}
-    $clean = @()
-
-    foreach ($pw in $list) {
-        if (-not $seen.ContainsKey($pw)) {
-            $seen[$pw] = $true
-            $clean += $pw
-        }
+        Write-Log "Loaded $fileCount unique password(s) from $file"
     }
 
     Write-Log "Total unique passwords including no-password and cache slots: $($clean.Count)"
