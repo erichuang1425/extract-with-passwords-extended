@@ -193,16 +193,26 @@ function Test-MultiVolumeComplete {
 
     if ($name -imatch "\.001$") {
         $baseName = $name -ireplace "\.001$", ""
-        $missing = @()
-        for ($vol = 2; $vol -le 999; $vol++) {
-            $volName = "{0}.{1:D3}" -f $baseName, $vol
-            $volPath = Join-Path $dir $volName
-            if (!(Test-Path -LiteralPath $volPath)) {
-                if ($vol -eq 2 -and !(Test-Path -LiteralPath $volPath)) {
-                    break
+        $globPattern = "{0}.[0-9][0-9][0-9]" -f $baseName
+        $present = @{}
+        try {
+            Get-ChildItem -LiteralPath $dir -Filter $globPattern -File -ErrorAction SilentlyContinue |
+                ForEach-Object {
+                    if ($_.Name -imatch '\.(\d{3})$') {
+                        $present[[int]$Matches[1]] = $true
+                    }
                 }
-                $missing += $volName
-                break
+        } catch {}
+
+        if (-not $present.ContainsKey(2)) {
+            return @{ Complete = $true; Missing = @() }
+        }
+
+        $maxVol = ($present.Keys | Measure-Object -Maximum).Maximum
+        $missing = @()
+        for ($vol = 2; $vol -le $maxVol; $vol++) {
+            if (-not $present.ContainsKey($vol)) {
+                $missing += ("{0}.{1:D3}" -f $baseName, $vol)
             }
         }
         return @{ Complete = ($missing.Count -eq 0); Missing = $missing }
@@ -210,16 +220,26 @@ function Test-MultiVolumeComplete {
 
     if ($name -imatch "\.part0*1\.rar$") {
         $pattern = $name -ireplace "\.part0*1\.rar$", ""
-        $missing = @()
-        for ($vol = 2; $vol -le 999; $vol++) {
-            $volName = "{0}.part{1:D2}.rar" -f $pattern, $vol
-            $volPath = Join-Path $dir $volName
-            if (!(Test-Path -LiteralPath $volPath)) {
-                if ($vol -eq 2 -and !(Test-Path -LiteralPath $volPath)) {
-                    break
+        $globPattern = "{0}.part*.rar" -f $pattern
+        $present = @{}
+        try {
+            Get-ChildItem -LiteralPath $dir -Filter $globPattern -File -ErrorAction SilentlyContinue |
+                ForEach-Object {
+                    if ($_.Name -imatch '\.part0*(\d+)\.rar$') {
+                        $present[[int]$Matches[1]] = $true
+                    }
                 }
-                $missing += $volName
-                break
+        } catch {}
+
+        if (-not $present.ContainsKey(2)) {
+            return @{ Complete = $true; Missing = @() }
+        }
+
+        $maxVol = ($present.Keys | Measure-Object -Maximum).Maximum
+        $missing = @()
+        for ($vol = 2; $vol -le $maxVol; $vol++) {
+            if (-not $present.ContainsKey($vol)) {
+                $missing += ("{0}.part{1:D2}.rar" -f $pattern, $vol)
             }
         }
         return @{ Complete = ($missing.Count -eq 0); Missing = $missing }
@@ -340,10 +360,68 @@ function Find-ArchivesFromInputs {
         }
     }
 
+    $promoted = Find-OrphanedSplitEntries -Archives $archives -Skipped $skipped
+    if ($promoted.Count -gt 0) {
+        foreach ($entry in $promoted) {
+            $archives += $entry
+            $skipped = @($skipped | Where-Object { $_ -ne $entry })
+            Write-Log "Promoted orphaned split entry: $entry"
+        }
+    }
+
     return @{
         Archives = @($archives | Sort-Object -Unique)
         Skipped = @($skipped | Sort-Object -Unique)
     }
+}
+
+function Find-OrphanedSplitEntries {
+    param(
+        [string[]]$Archives,
+        [string[]]$Skipped
+    )
+
+    $promoted = @()
+    $rarHave = @{}
+    foreach ($a in $Archives) {
+        if ($a -imatch '\.rar$' -or $a -imatch '\.part0*1\.rar$') {
+            $rarHave[(Split-Path $a -Parent).ToLowerInvariant()] = $true
+        }
+    }
+
+    $rGroups = @{}
+    $zGroups = @{}
+    foreach ($s in $Skipped) {
+        $name = [IO.Path]::GetFileName($s)
+        $dir = Split-Path $s -Parent
+        $dirKey = $dir.ToLowerInvariant()
+
+        if ($name -imatch '^(.+)\.r(\d{2,})$') {
+            if ($rarHave.ContainsKey($dirKey)) { continue }
+            $base = $Matches[1]
+            $num = [int]$Matches[2]
+            $key = (Join-Path $dir $base).ToLowerInvariant()
+            if (-not $rGroups.ContainsKey($key)) { $rGroups[$key] = @() }
+            $rGroups[$key] += [PSCustomObject]@{ Path = $s; Num = $num }
+        } elseif ($name -imatch '^(.+)\.z(\d+)$') {
+            $base = $Matches[1]
+            $num = [int]$Matches[2]
+            $key = (Join-Path $dir $base).ToLowerInvariant()
+            if (-not $zGroups.ContainsKey($key)) { $zGroups[$key] = @() }
+            $zGroups[$key] += [PSCustomObject]@{ Path = $s; Num = $num }
+        }
+    }
+
+    foreach ($key in $rGroups.Keys) {
+        $entry = $rGroups[$key] | Sort-Object Num | Select-Object -First 1
+        if ($entry) { $promoted += $entry.Path }
+    }
+    foreach ($key in $zGroups.Keys) {
+        $entry = $zGroups[$key] | Sort-Object Num | Select-Object -First 1
+        if ($entry) { $promoted += $entry.Path }
+    }
+
+    return $promoted
 }
 
 function Test-ArchiveIsEncrypted {
