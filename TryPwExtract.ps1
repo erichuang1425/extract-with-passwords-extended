@@ -358,7 +358,6 @@ try {
     $FailureReasons = @{}     # reason -> count
     $CacheHitCount = 0
     $CacheMissCount = 0
-    $AssumedEncryptedByFormat = @{}  # ".rar"/".7z"/".zip" -> $true once confirmed encrypted
 
     # ============================================================
     # Parallel archive mode
@@ -521,31 +520,23 @@ try {
 
         $found = $false
         $isEncryptable = Test-IsEncryptionCapable $Archive
-        $archiveFormatKey = Get-ArchiveFormatKey $Archive
 
         $actuallyEncrypted = $null
         if ($isEncryptable -and $CheckEncryptionBeforeCycling -and $SevenZip) {
-            if ($AssumedEncryptedByFormat[$archiveFormatKey]) {
-                Write-Status "Encryption check skipped (format $archiveFormatKey already confirmed encrypted in this batch)." "dim"
-                Write-Log "Skipping encryption check for $archiveFormatKey (already confirmed encrypted earlier in batch)."
-                $actuallyEncrypted = $true
+            if ($isLargeArchive) {
+                Write-Status "Inspecting encryption status (large archive, may take a moment)..." "dim"
             } else {
-                if ($isLargeArchive) {
-                    Write-Status "Inspecting encryption status (large archive, may take a moment)..." "dim"
-                } else {
-                    Write-Status "Inspecting archive encryption status..." "dim"
-                }
-                $actuallyEncrypted = Test-ArchiveIsEncrypted -Archive $Archive -SevenZipPath $SevenZip
-                if ($actuallyEncrypted -eq $false) {
-                    Write-Status "Archive is not encrypted despite encryption-capable format; extracting directly..." "info"
-                    Write-Log "Header inspection: archive is not encrypted."
-                    $isEncryptable = $false
-                } elseif ($null -eq $actuallyEncrypted) {
-                    Write-Log "Header inspection: could not determine encryption status; proceeding with password cycling."
-                } else {
-                    Write-Log "Header inspection: archive is encrypted."
-                    $AssumedEncryptedByFormat[$archiveFormatKey] = $true
-                }
+                Write-Status "Inspecting archive encryption status..." "dim"
+            }
+            $actuallyEncrypted = Test-ArchiveIsEncrypted -Archive $Archive -SevenZipPath $SevenZip
+            if ($actuallyEncrypted -eq $false) {
+                Write-Status "Archive is not encrypted despite encryption-capable format; extracting directly..." "info"
+                Write-Log "Header inspection: archive is not encrypted."
+                $isEncryptable = $false
+            } elseif ($null -eq $actuallyEncrypted) {
+                Write-Log "Header inspection: could not determine encryption status; proceeding with password cycling."
+            } else {
+                Write-Log "Header inspection: archive is encrypted."
             }
         }
 
@@ -742,7 +733,6 @@ try {
                 $EngineStats[$winningEngine.Name].Successes++
                 if ($winningPassword -ne "") {
                     if ($CachedPasswordSet.ContainsKey($winningPassword)) { $CacheHitCount++ } else { $CacheMissCount++ }
-                    $AssumedEncryptedByFormat[$archiveFormatKey] = $true
                 }
                 $found = $true
             } else {
@@ -821,7 +811,6 @@ try {
                         $EngineStats[$engine.Name].Successes++
                         if ($Pw -ne "") {
                             if ($CachedPasswordSet.ContainsKey($Pw)) { $CacheHitCount++ } else { $CacheMissCount++ }
-                            $AssumedEncryptedByFormat[$archiveFormatKey] = $true
                         }
                         $found = $true
                         break
@@ -909,7 +898,6 @@ try {
                         $EngineStats[$engine.Name].Successes++
                         if ($Pw -ne "") {
                             if ($CachedPasswordSet.ContainsKey($Pw)) { $CacheHitCount++ } else { $CacheMissCount++ }
-                            $AssumedEncryptedByFormat[$archiveFormatKey] = $true
                         }
                         $found = $true
                         break
