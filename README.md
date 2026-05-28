@@ -234,6 +234,32 @@ Set `maxParallelArchives` > 1 to process multiple archives concurrently using Po
 - **No archive creation**: This tool is extraction-only.
 - **Toast notifications**: Require PowerShell 5.0+ and Windows 10+. Silently skipped if unavailable.
 
+## Troubleshooting
+
+### Corrupted config
+
+If `config.json` becomes malformed (invalid JSON, out-of-range numeric values, unknown enum strings), the script prints `[!] Falling back to defaults due to invalid config.json` at startup and ignores all stored settings for that run. Out-of-range values for individual keys (e.g. negative timeouts, `maxParallelArchives` outside `[1, 32]`) are clamped to the valid range with a `[!]` warning rather than disabling the whole file.
+
+To reset to defaults, delete the file:
+
+```
+%LOCALAPPDATA%\ArchivePwExtract\config.json
+```
+
+Re-run the installer (or just the helper script) to regenerate a fresh `config.json` with default values.
+
+### Configuration combinations to avoid
+
+Some combinations are valid JSON but produce undesirable behavior:
+
+| Combination | Effect |
+|---|---|
+| `testOnlyFirst = false` + `tryExtractEvenIfTestFails = true` | Wasteful — every password attempt does a full extract; the test/extract fallback never kicks in because there is no test phase. |
+| `checkEncryptionBeforeCycling = false` + `tryNoPasswordFirst = false` | Unencrypted-but-encryption-capable archives (a plain `.zip` with no password) get the full password list cycled against them even though they don't need any password. |
+| `maxParallelPasswords > 1` + `testOnlyFirst = false` | Each worker writes extraction output to the same folder concurrently, racing each other. Parallel password testing is designed for the test-only path. |
+| `maxParallelArchives > 1` + `alwaysAskOutputDirectory = true` | The script will still prompt once at startup, but interactive prompts inside parallel workers are not surfaced and may hang. |
+| `usePasswordCache = false` + `passwordCacheRetentionDays > 0` | Retention setting has no effect; the cache file is never read or written. |
+
 ## Uninstallation
 
 Run the uninstall script:

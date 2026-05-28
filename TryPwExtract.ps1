@@ -133,17 +133,26 @@ try {
     $WinRar = Get-WinRarOrUnRarPath
 
     # Validate engines actually work
-    if ($SevenZip -and -not (Test-EngineWorks $SevenZip)) {
-        Write-Log "7-Zip at $SevenZip failed smoke test; disabling." "WARN"
-        $SevenZip = $null
+    if ($SevenZip) {
+        Write-Status "Probing 7-Zip..." "dim"
+        if (-not (Test-EngineWorks $SevenZip)) {
+            Write-Log "7-Zip at $SevenZip failed smoke test; disabling." "WARN"
+            $SevenZip = $null
+        }
     }
-    if ($PeaZip7z -and -not (Test-EngineWorks $PeaZip7z)) {
-        Write-Log "PeaZip 7z at $PeaZip7z failed smoke test; disabling." "WARN"
-        $PeaZip7z = $null
+    if ($PeaZip7z) {
+        Write-Status "Probing PeaZip bundled 7z..." "dim"
+        if (-not (Test-EngineWorks $PeaZip7z)) {
+            Write-Log "PeaZip 7z at $PeaZip7z failed smoke test; disabling." "WARN"
+            $PeaZip7z = $null
+        }
     }
-    if ($WinRar -and -not (Test-EngineWorks $WinRar)) {
-        Write-Log "WinRAR/UnRAR at $WinRar failed smoke test; disabling." "WARN"
-        $WinRar = $null
+    if ($WinRar) {
+        Write-Status "Probing WinRAR/UnRAR..." "dim"
+        if (-not (Test-EngineWorks $WinRar)) {
+            Write-Log "WinRAR/UnRAR at $WinRar failed smoke test; disabling." "WARN"
+            $WinRar = $null
+        }
     }
 
     Write-Status "Detected engines:" "info"
@@ -334,6 +343,21 @@ try {
         exit 1
     }
 
+    # Build set of cache-origin passwords (for cache-hit-rate summary)
+    $CachedPasswordSet = @{}
+    if ($UsePasswordCache) {
+        foreach ($cpw in @(Get-CachedPasswords)) {
+            $CachedPasswordSet[$cpw] = $true
+        }
+    }
+
+    # Summary trackers
+    $EngineStats = @{}        # engineName -> @{ Successes; Attempts }
+    $ArchiveTimingsMs = @()   # per-archive elapsed ms
+    $FailureReasons = @{}     # reason -> count
+    $CacheHitCount = 0
+    $CacheMissCount = 0
+
     # ============================================================
     # Parallel archive mode
     # ============================================================
@@ -361,6 +385,45 @@ try {
         $Failed = @($parallelResults | Where-Object { $_.Status -eq "Failed" } | ForEach-Object { $_.Archive })
         $NoPassword = @($parallelResults | Where-Object { $_.Status -eq "NoPassword" } | ForEach-Object { $_.Archive })
         $OutputFolders = @($parallelResults | Where-Object { $_.OutputDir } | ForEach-Object { $_.OutputDir })
+
+        foreach ($r in $parallelResults) {
+            if ($null -ne $r.ElapsedMs -and $r.ElapsedMs -gt 0) {
+                $ArchiveTimingsMs += [long]$r.ElapsedMs
+            }
+
+            $planNames = @()
+            if ($r.PSObject.Properties["EnginesInPlan"] -and $r.EnginesInPlan) {
+                $planNames = @($r.EnginesInPlan)
+            }
+            foreach ($name in $planNames) {
+                if (-not $EngineStats.ContainsKey($name)) {
+                    $EngineStats[$name] = @{ Successes = 0; Attempts = 0 }
+                }
+                $EngineStats[$name].Attempts++
+            }
+
+            if (($r.Status -eq "Succeeded" -or $r.Status -eq "NoPassword") -and $r.Engine) {
+                if (-not $EngineStats.ContainsKey($r.Engine)) {
+                    $EngineStats[$r.Engine] = @{ Successes = 0; Attempts = 0 }
+                }
+                $EngineStats[$r.Engine].Successes++
+            }
+
+            if ($r.Status -eq "Succeeded" -and $r.Password) {
+                if ($CachedPasswordSet.ContainsKey($r.Password)) {
+                    $CacheHitCount++
+                } else {
+                    $CacheMissCount++
+                }
+            }
+
+            if ($r.Status -eq "Failed") {
+                $reason = if ($r.Reason) { [string]$r.Reason } else { "Unknown" }
+                if ($reason -like "WorkerException*") { $reason = "WorkerException" }
+                if (-not $FailureReasons.ContainsKey($reason)) { $FailureReasons[$reason] = 0 }
+                $FailureReasons[$reason]++
+            }
+        }
 
         # Fall through to summary
     } else {
@@ -394,6 +457,10 @@ try {
             Write-Status "Archive is locked by another process or inaccessible." "fail"
             Write-Log "Archive locked or inaccessible: $Archive" "ERROR"
             $Failed += $Archive
+            $archiveStopwatch.Stop()
+            $ArchiveTimingsMs += [long]$archiveStopwatch.ElapsedMilliseconds
+            if (-not $FailureReasons.ContainsKey("Inaccessible")) { $FailureReasons["Inaccessible"] = 0 }
+            $FailureReasons["Inaccessible"]++
             continue
         }
 
@@ -421,7 +488,17 @@ try {
             Write-Status "No compatible engine for this archive." "fail"
             Write-Log "No compatible engine for this archive." "ERROR"
             $Failed += $Archive
+            $archiveStopwatch.Stop()
+            $ArchiveTimingsMs += [long]$archiveStopwatch.ElapsedMilliseconds
+            if (-not $FailureReasons.ContainsKey("NoEngine")) { $FailureReasons["NoEngine"] = 0 }
+            $FailureReasons["NoEngine"]++
             continue
+        }
+
+        # Count each engine in this archive's plan as one attempt for engine-effectiveness stats
+        foreach ($e in $enginePlan) {
+            if (-not $EngineStats.ContainsKey($e.Name)) { $EngineStats[$e.Name] = @{ Successes = 0; Attempts = 0 } }
+            $EngineStats[$e.Name].Attempts++
         }
 
         Write-Status "Engines: $(($enginePlan | ForEach-Object { $_.Name }) -join ', ')" "info"
@@ -445,7 +522,11 @@ try {
 
         $actuallyEncrypted = $null
         if ($isEncryptable -and $CheckEncryptionBeforeCycling -and $SevenZip) {
-            Write-Status "Inspecting archive encryption status..." "dim"
+            if ($isLargeArchive) {
+                Write-Status "Inspecting encryption status (large archive, may take a moment)..." "dim"
+            } else {
+                Write-Status "Inspecting archive encryption status..." "dim"
+            }
             $actuallyEncrypted = Test-ArchiveIsEncrypted -Archive $Archive -SevenZipPath $SevenZip
             if ($actuallyEncrypted -eq $false) {
                 Write-Status "Archive is not encrypted despite encryption-capable format; extracting directly..." "info"
@@ -485,6 +566,8 @@ try {
                     $Succeeded += $Archive
                     $NoPassword += $Archive
                     $OutputFolders += $outputDir
+                    if (-not $EngineStats.ContainsKey($engine.Name)) { $EngineStats[$engine.Name] = @{ Successes = 0; Attempts = 0 } }
+                    $EngineStats[$engine.Name].Successes++
                     $found = $true
                     break
                 }
@@ -497,9 +580,12 @@ try {
                 Write-Status "See log: $RunLogPath" "dim"
                 Write-Log "FAILED: $Archive" "ERROR"
                 $Failed += $Archive
+                if (-not $FailureReasons.ContainsKey("ExtractionFailed")) { $FailureReasons["ExtractionFailed"] = 0 }
+                $FailureReasons["ExtractionFailed"]++
                 Remove-EmptyOutputDir -OutputDir $outputDir -SeparateFolders $SeparateFolders
             }
 
+            $ArchiveTimingsMs += [long]$archiveStopwatch.ElapsedMilliseconds
             continue
         }
 
@@ -546,10 +632,17 @@ try {
         } elseif ($useTestOnly) {
             Write-Log "Using test-only-then-extract optimization."
 
+            $showEngineInProgress = ($totalPasswords -gt 50)
+            $primaryEngineName = if (@($enginePlan).Count -gt 0) { $enginePlan[0].Name } else { "" }
+
             foreach ($Pw in $currentPasswords) {
                 $passwordIndex++
 
-                Write-ProgressBar -Current $passwordIndex -Total $totalPasswords -ElapsedMs $passwordStopwatch.ElapsedMilliseconds
+                if ($showEngineInProgress) {
+                    Write-ProgressBar -Current $passwordIndex -Total $totalPasswords -ElapsedMs $passwordStopwatch.ElapsedMilliseconds -EngineName $primaryEngineName
+                } else {
+                    Write-ProgressBar -Current $passwordIndex -Total $totalPasswords -ElapsedMs $passwordStopwatch.ElapsedMilliseconds
+                }
 
                 if ($Pw -eq "") {
                     Write-Log "Test-only: trying without password [$passwordIndex/$totalPasswords]..."
@@ -635,6 +728,11 @@ try {
 
                 $Succeeded += $Archive
                 $OutputFolders += $outputDir
+                if (-not $EngineStats.ContainsKey($winningEngine.Name)) { $EngineStats[$winningEngine.Name] = @{ Successes = 0; Attempts = 0 } }
+                $EngineStats[$winningEngine.Name].Successes++
+                if ($winningPassword -ne "") {
+                    if ($CachedPasswordSet.ContainsKey($winningPassword)) { $CacheHitCount++ } else { $CacheMissCount++ }
+                }
                 $found = $true
             } else {
                 Write-Log "Test succeeded but extraction failed; falling back to full cycle." "WARN"
@@ -647,9 +745,16 @@ try {
             $passwordIndex = 0
             $passwordStopwatch.Restart()
 
+            $showEngineInProgress = ($totalPasswords -gt 50)
+            $primaryEngineName = if (@($enginePlan).Count -gt 0) { $enginePlan[0].Name } else { "" }
+
             foreach ($Pw in $currentPasswords) {
                 $passwordIndex++
-                Write-ProgressBar -Current $passwordIndex -Total $totalPasswords -ElapsedMs $passwordStopwatch.ElapsedMilliseconds
+                if ($showEngineInProgress) {
+                    Write-ProgressBar -Current $passwordIndex -Total $totalPasswords -ElapsedMs $passwordStopwatch.ElapsedMilliseconds -EngineName $primaryEngineName
+                } else {
+                    Write-ProgressBar -Current $passwordIndex -Total $totalPasswords -ElapsedMs $passwordStopwatch.ElapsedMilliseconds
+                }
 
                 foreach ($engine in $enginePlan) {
                     $ok = Try-EnginePassword `
@@ -701,6 +806,11 @@ try {
 
                         $Succeeded += $Archive
                         $OutputFolders += $outputDir
+                        if (-not $EngineStats.ContainsKey($engine.Name)) { $EngineStats[$engine.Name] = @{ Successes = 0; Attempts = 0 } }
+                        $EngineStats[$engine.Name].Successes++
+                        if ($Pw -ne "") {
+                            if ($CachedPasswordSet.ContainsKey($Pw)) { $CacheHitCount++ } else { $CacheMissCount++ }
+                        }
                         $found = $true
                         break
                     }
@@ -715,10 +825,17 @@ try {
             $passwordIndex = 0
             $passwordStopwatch.Restart()
 
+            $showEngineInProgress = ($totalPasswords -gt 50)
+            $primaryEngineName = if (@($enginePlan).Count -gt 0) { $enginePlan[0].Name } else { "" }
+
             foreach ($Pw in $currentPasswords) {
                 $passwordIndex++
 
-                Write-ProgressBar -Current $passwordIndex -Total $totalPasswords -ElapsedMs $passwordStopwatch.ElapsedMilliseconds
+                if ($showEngineInProgress) {
+                    Write-ProgressBar -Current $passwordIndex -Total $totalPasswords -ElapsedMs $passwordStopwatch.ElapsedMilliseconds -EngineName $primaryEngineName
+                } else {
+                    Write-ProgressBar -Current $passwordIndex -Total $totalPasswords -ElapsedMs $passwordStopwatch.ElapsedMilliseconds
+                }
 
                 if ($Pw -eq "") {
                     Write-Log "Trying without password [$passwordIndex/$totalPasswords]..."
@@ -776,6 +893,11 @@ try {
 
                         $Succeeded += $Archive
                         $OutputFolders += $outputDir
+                        if (-not $EngineStats.ContainsKey($engine.Name)) { $EngineStats[$engine.Name] = @{ Successes = 0; Attempts = 0 } }
+                        $EngineStats[$engine.Name].Successes++
+                        if ($Pw -ne "") {
+                            if ($CachedPasswordSet.ContainsKey($Pw)) { $CacheHitCount++ } else { $CacheMissCount++ }
+                        }
                         $found = $true
                         break
                     }
@@ -795,10 +917,13 @@ try {
             Write-Status "See log: $RunLogPath" "dim"
             Write-Log "FAILED: $Archive" "ERROR"
             $Failed += $Archive
+            if (-not $FailureReasons.ContainsKey("WrongPassword")) { $FailureReasons["WrongPassword"] = 0 }
+            $FailureReasons["WrongPassword"]++
             Remove-EmptyOutputDir -OutputDir $outputDir -SeparateFolders $SeparateFolders
         }
 
         $archiveStopwatch.Stop()
+        $ArchiveTimingsMs += [long]$archiveStopwatch.ElapsedMilliseconds
         Write-Log "Archive completed in $($archiveStopwatch.Elapsed.ToString('hh\:mm\:ss'))"
     }
 
@@ -818,27 +943,135 @@ try {
     $noPwCount = @($NoPassword).Count
     $elapsed = $totalStopwatch.Elapsed.ToString('hh\:mm\:ss')
 
-    Write-Host ""
-    Write-Host "    Results" -ForegroundColor White
-    Write-Host "    -------" -ForegroundColor DarkGray
-
-    Write-Host "    Succeeded:    " -NoNewline
-    if ($succCount -gt 0) { Write-Host "$succCount / $totalCount" -ForegroundColor Green }
-    else { Write-Host "$succCount / $totalCount" -ForegroundColor DarkGray }
-
-    Write-Host "    Failed:       " -NoNewline
-    if ($failCount -gt 0) { Write-Host "$failCount / $totalCount" -ForegroundColor Red }
-    else { Write-Host "$failCount / $totalCount" -ForegroundColor Green }
-
-    Write-Host "    No password:  " -NoNewline
-    Write-Host "$noPwCount" -ForegroundColor DarkGray
-
-    Write-Host "    Total time:   " -NoNewline
-    Write-Host $elapsed -ForegroundColor White
+    $boxWidth = 60
+    $borderLine = "    +" + ("-" * ($boxWidth - 2)) + "+"
+    function _PadInside([string]$text) {
+        $inner = $boxWidth - 4
+        if ($text.Length -gt $inner) { $text = $text.Substring(0, $inner) }
+        return "    | " + $text + (" " * ($inner - $text.Length)) + " |"
+    }
 
     Write-Host ""
+    Write-Host $borderLine -ForegroundColor DarkCyan
+    Write-Host (_PadInside "Results") -ForegroundColor White
+    Write-Host $borderLine -ForegroundColor DarkCyan
+
+    $valuePad = $boxWidth - 24
+
+    Write-Host "    | " -NoNewline -ForegroundColor DarkCyan
+    Write-Host ("Succeeded:    ").PadRight(20) -NoNewline
+    $succText = "$succCount / $totalCount"
+    if ($succCount -gt 0) {
+        Write-Host $succText.PadRight($valuePad) -ForegroundColor Green -NoNewline
+    } else {
+        Write-Host $succText.PadRight($valuePad) -ForegroundColor DarkGray -NoNewline
+    }
+    Write-Host " |" -ForegroundColor DarkCyan
+
+    Write-Host "    | " -NoNewline -ForegroundColor DarkCyan
+    Write-Host ("Failed:       ").PadRight(20) -NoNewline
+    $failText = "$failCount / $totalCount"
+    if ($failCount -gt 0) {
+        Write-Host $failText.PadRight($valuePad) -ForegroundColor Red -NoNewline
+    } else {
+        Write-Host $failText.PadRight($valuePad) -ForegroundColor Green -NoNewline
+    }
+    Write-Host " |" -ForegroundColor DarkCyan
+
+    Write-Host "    | " -NoNewline -ForegroundColor DarkCyan
+    Write-Host ("No password:  ").PadRight(20) -NoNewline
+    Write-Host "$noPwCount".PadRight($valuePad) -ForegroundColor DarkGray -NoNewline
+    Write-Host " |" -ForegroundColor DarkCyan
+
+    Write-Host "    | " -NoNewline -ForegroundColor DarkCyan
+    Write-Host ("Total time:   ").PadRight(20) -NoNewline
+    Write-Host $elapsed.PadRight($valuePad) -ForegroundColor White -NoNewline
+    Write-Host " |" -ForegroundColor DarkCyan
+
+    Write-Host $borderLine -ForegroundColor DarkCyan
 
     Write-Log "Summary: Succeeded=$succCount Failed=$failCount NoPassword=$noPwCount Elapsed=$elapsed"
+
+    # Per-engine effectiveness
+    if ($EngineStats.Count -gt 0) {
+        Write-Host ""
+        Write-Host $borderLine -ForegroundColor DarkCyan
+        Write-Host (_PadInside "Engine effectiveness") -ForegroundColor White
+        Write-Host $borderLine -ForegroundColor DarkCyan
+
+        foreach ($name in ($EngineStats.Keys | Sort-Object)) {
+            $stats = $EngineStats[$name]
+            $succ = [int]$stats.Successes
+            $att = [int]$stats.Attempts
+            $pct = if ($att -gt 0) { [math]::Round(($succ / $att) * 100) } else { 0 }
+            $line = "{0,-22} {1} successes / {2} attempts ({3}%)" -f $name, $succ, $att, $pct
+            Write-Host (_PadInside $line) -ForegroundColor Gray
+            Write-Log "Engine $name: $succ successes / $att attempts ($pct%)"
+        }
+        Write-Host $borderLine -ForegroundColor DarkCyan
+    }
+
+    # Password cache hit rate
+    $cacheTotal = $CacheHitCount + $CacheMissCount
+    if ($UsePasswordCache -and $cacheTotal -gt 0) {
+        Write-Host ""
+        Write-Host $borderLine -ForegroundColor DarkCyan
+        Write-Host (_PadInside "Password cache") -ForegroundColor White
+        Write-Host $borderLine -ForegroundColor DarkCyan
+
+        $hitPct = if ($cacheTotal -gt 0) { [math]::Round(($CacheHitCount / $cacheTotal) * 100) } else { 0 }
+        Write-Host (_PadInside ("Cached entries loaded: {0}" -f $CachedPasswordSet.Count)) -ForegroundColor Gray
+        Write-Host (_PadInside ("Hits:                  {0} / {1} ({2}%)" -f $CacheHitCount, $cacheTotal, $hitPct)) -ForegroundColor Gray
+        Write-Host (_PadInside ("Misses (from list):    {0}" -f $CacheMissCount)) -ForegroundColor Gray
+        Write-Host $borderLine -ForegroundColor DarkCyan
+        Write-Log "Cache: $CacheHitCount hits / $cacheTotal unlocks ($hitPct%); $($CachedPasswordSet.Count) cached entries loaded"
+    }
+
+    # Time-per-archive distribution
+    if ($ArchiveTimingsMs.Count -gt 0) {
+        $sorted = @($ArchiveTimingsMs | Sort-Object)
+        $minMs = $sorted[0]
+        $maxMs = $sorted[-1]
+        $midIdx = [int][math]::Floor($sorted.Count / 2)
+        $medMs = if ($sorted.Count % 2 -eq 1) { $sorted[$midIdx] } else { [long](($sorted[$midIdx - 1] + $sorted[$midIdx]) / 2) }
+
+        Write-Host ""
+        Write-Host $borderLine -ForegroundColor DarkCyan
+        Write-Host (_PadInside "Time per archive") -ForegroundColor White
+        Write-Host $borderLine -ForegroundColor DarkCyan
+        Write-Host (_PadInside ("Min:    {0}" -f (Format-ElapsedFromMs $minMs))) -ForegroundColor Gray
+        Write-Host (_PadInside ("Median: {0}" -f (Format-ElapsedFromMs $medMs))) -ForegroundColor Gray
+        Write-Host (_PadInside ("Max:    {0}" -f (Format-ElapsedFromMs $maxMs))) -ForegroundColor Gray
+        Write-Host $borderLine -ForegroundColor DarkCyan
+        Write-Log "Per-archive time: min=$(Format-ElapsedFromMs $minMs) median=$(Format-ElapsedFromMs $medMs) max=$(Format-ElapsedFromMs $maxMs)"
+    }
+
+    # Error-type breakdown
+    if ($FailureReasons.Count -gt 0) {
+        Write-Host ""
+        Write-Host $borderLine -ForegroundColor DarkCyan
+        Write-Host (_PadInside "Failure breakdown") -ForegroundColor White
+        Write-Host $borderLine -ForegroundColor DarkCyan
+
+        $labelMap = @{
+            "WrongPassword"    = "Wrong password"
+            "Inaccessible"     = "Inaccessible / locked"
+            "NoEngine"         = "No compatible engine"
+            "ExtractionFailed" = "Corrupt or unsupported"
+            "WorkerException"  = "Worker exception"
+            "MissingVolume"    = "Missing volume"
+            "Timeout"          = "Timeout"
+        }
+        foreach ($reason in ($FailureReasons.Keys | Sort-Object)) {
+            $label = if ($labelMap.ContainsKey($reason)) { $labelMap[$reason] } else { $reason }
+            $count = [int]$FailureReasons[$reason]
+            Write-Host (_PadInside ("{0,-25} {1}" -f $label, $count)) -ForegroundColor Gray
+            Write-Log "Failure: $label = $count"
+        }
+        Write-Host $borderLine -ForegroundColor DarkCyan
+    }
+
+    Write-Host ""
 
     Show-CompletionToast -Succeeded $succCount -Failed $failCount -Total $totalCount
 
