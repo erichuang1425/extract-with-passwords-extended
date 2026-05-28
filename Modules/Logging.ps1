@@ -10,6 +10,57 @@ function Write-Log {
     Add-Content -LiteralPath $RunLogPath -Value $line -Encoding UTF8
 }
 
+function Merge-WorkerLogs {
+    param(
+        [string]$MainLogPath
+    )
+
+    if (-not $MainLogPath -or -not (Test-Path -LiteralPath $MainLogPath)) {
+        return
+    }
+
+    $logDir = Split-Path $MainLogPath -Parent
+    $logLeaf = [IO.Path]::GetFileNameWithoutExtension($MainLogPath)
+    $logExt = [IO.Path]::GetExtension($MainLogPath)
+    $workerPattern = "${logLeaf}_worker_*${logExt}"
+
+    $workerFiles = @()
+    try {
+        $workerFiles = @(Get-ChildItem -LiteralPath $logDir -Filter $workerPattern -File -ErrorAction SilentlyContinue |
+                        Sort-Object Name)
+    } catch {
+        return
+    }
+
+    if ($workerFiles.Count -eq 0) { return }
+
+    foreach ($wf in $workerFiles) {
+        try {
+            $threadId = "?"
+            if ($wf.Name -match '_worker_(\d+)') {
+                $threadId = $Matches[1]
+            }
+
+            $header = @(
+                "",
+                "--- merged from worker thread $threadId ($($wf.Name)) ---"
+            )
+            Add-Content -LiteralPath $MainLogPath -Value $header -Encoding UTF8
+
+            $content = Get-Content -LiteralPath $wf.FullName -Encoding UTF8 -ErrorAction SilentlyContinue
+            if ($content) {
+                Add-Content -LiteralPath $MainLogPath -Value $content -Encoding UTF8
+            }
+
+            Add-Content -LiteralPath $MainLogPath -Value "--- end worker thread $threadId ---" -Encoding UTF8
+
+            Remove-Item -LiteralPath $wf.FullName -Force -ErrorAction SilentlyContinue
+        } catch {
+            try { Write-Log "Failed to merge worker log $($wf.Name): $($_.Exception.Message)" "WARN" } catch {}
+        }
+    }
+}
+
 function Write-Both {
     param(
         [string]$Message,
