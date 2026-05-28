@@ -135,27 +135,6 @@ function Test-IsRarLike {
     )
 }
 
-function Get-ArchiveFormatKey {
-    param([string]$Path)
-
-    $name = ([IO.Path]::GetFileName($Path)).ToLowerInvariant()
-
-    if ($name -match '\.part\d+\.rar$') { return '.rar' }
-    if ($name -match '\.rar\.001$')     { return '.rar' }
-    if ($name -match '\.7z\.001$')      { return '.7z' }
-    if ($name -match '\.zip\.001$')     { return '.zip' }
-    if ($name -match '\.r\d{2,}$')      { return '.rar' }
-    if ($name -match '\.z\d+$')         { return '.zip' }
-
-    $ext = [IO.Path]::GetExtension($name)
-    if ($ext -eq '.001') {
-        $stem = $name.Substring(0, $name.Length - 4)
-        $ext = [IO.Path]::GetExtension($stem)
-    }
-
-    return $ext
-}
-
 function Test-IsEncryptionCapable {
     param([string]$Path)
 
