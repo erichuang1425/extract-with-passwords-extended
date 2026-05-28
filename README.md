@@ -163,6 +163,7 @@ Settings are stored in `%LOCALAPPDATA%\ArchivePwExtract\config.json` and survive
 | `verboseEngineLogging` | `false` | Log full engine output instead of condensed summaries |
 | `maxParallelArchives` | `1` | Number of archives to process concurrently (1 = sequential) |
 | `maxParallelPasswords` | `1` | Number of passwords to test concurrently per archive |
+| `maxArchivesPerScan` | `0` | Cap on archives detected per folder scan (0 = unbounded). Stops recursive enumeration early on huge directories. |
 | `preferGui` | `false` | Launch WPF GUI instead of console mode (requires PS 5.1+) |
 
 ## Supported Formats
