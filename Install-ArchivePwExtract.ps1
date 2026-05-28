@@ -96,6 +96,7 @@ if (!(Test-Path -LiteralPath $ConfigPath)) {
     "verboseEngineLogging": false,
     "maxParallelArchives": 1,
     "maxParallelPasswords": 1,
+    "maxArchivesPerScan": 0,
     "preferGui": false
 }
 "@ | Set-Content -LiteralPath $ConfigPath -Encoding UTF8

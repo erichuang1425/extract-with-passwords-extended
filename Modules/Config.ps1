@@ -39,6 +39,7 @@ $SkipTestExtractFallbackForLargeArchives = $true
 $VerboseEngineLogging = $false
 $MaxParallelArchives = 1
 $MaxParallelPasswords = 1
+$MaxArchivesPerScan = 0
 $PreferGui = $false
 
 $EncryptionCapableExtensions = @{
@@ -56,6 +57,7 @@ function Test-ConfigSane {
         "LargeArchiveThresholdMB"        = @{ Min = 0;    Max = 1048576; Default = 500 }
         "MaxParallelArchives"            = @{ Min = 1;    Max = 32; Default = 1 }
         "MaxParallelPasswords"           = @{ Min = 1;    Max = 32; Default = 1 }
+        "MaxArchivesPerScan"             = @{ Min = 0;    Max = 1000000; Default = 0 }
     }
 
     foreach ($name in $intClamps.Keys) {
@@ -141,6 +143,7 @@ function Read-Config {
             "verboseEngineLogging" = "VerboseEngineLogging"
             "maxParallelArchives" = "MaxParallelArchives"
             "maxParallelPasswords" = "MaxParallelPasswords"
+            "maxArchivesPerScan" = "MaxArchivesPerScan"
             "preferGui" = "PreferGui"
         }
 

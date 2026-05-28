@@ -77,6 +77,7 @@ try {
     Write-Log "LargeArchiveThresholdMB: $LargeArchiveThresholdMB"
     Write-Log "MaxParallelArchives: $MaxParallelArchives"
     Write-Log "MaxParallelPasswords: $MaxParallelPasswords"
+    Write-Log "MaxArchivesPerScan: $MaxArchivesPerScan"
     Write-Log "PreferGui: $PreferGui"
 
     foreach ($p in $InputPaths) {
@@ -189,7 +190,7 @@ try {
         Write-Log "Created missing password file: $PwFile"
     }
 
-    $result = Find-ArchivesFromInputs -Paths $InputPaths
+    $result = Find-ArchivesFromInputs -Paths $InputPaths -Limit $MaxArchivesPerScan
     $Archives = @($result.Archives)
     $Skipped = @($result.Skipped)
 

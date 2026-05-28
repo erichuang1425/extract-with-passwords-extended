@@ -29,12 +29,14 @@ function Invoke-ParallelPasswordTest {
     $cancelSource = New-Object System.Threading.CancellationTokenSource
     $resultBag = [System.Collections.Concurrent.ConcurrentDictionary[string, object]]::new()
     $errorBag = [System.Collections.Concurrent.ConcurrentBag[string]]::new()
+    $queue = New-Object 'System.Collections.Concurrent.ConcurrentQueue[string]'
+    foreach ($pw in $Passwords) { $queue.Enqueue([string]$pw) }
     $jobs = @()
 
     $scriptBlock = {
         param(
-            $Passwords, $EnginePlan, $Archive, $OutputDir,
-            $SeparateFolders, $Timeout, $StartIndex, $EndIndex,
+            $Queue, $EnginePlan, $Archive, $OutputDir,
+            $SeparateFolders, $Timeout,
             $CancelSource, $ResultBag, $ErrorBag, $ModulesDir,
             $ConfigVars
         )
@@ -49,10 +51,9 @@ function Invoke-ParallelPasswordTest {
         . "$ModulesDir\ArchiveUtils.ps1"
         . "$ModulesDir\Extraction.ps1"
 
-        for ($i = $StartIndex; $i -lt $EndIndex; $i++) {
-            if ($CancelSource.Token.IsCancellationRequested) { break }
-
-            $pw = $Passwords[$i]
+        $pw = $null
+        while (-not $CancelSource.Token.IsCancellationRequested) {
+            if (-not $Queue.TryDequeue([ref]$pw)) { break }
 
             foreach ($engine in $EnginePlan) {
                 if ($CancelSource.Token.IsCancellationRequested) { break }
@@ -65,12 +66,12 @@ function Invoke-ParallelPasswordTest {
                         $testOk = Test-WithWinRar -RarExe $engine.Path -Archive $Archive -Password $pw -Timeout $Timeout
                     }
                 } catch {
-                    $ErrorBag.Add("Engine $($engine.Name) threw on password index $i : $($_.Exception.Message)")
+                    $ErrorBag.Add("Engine $($engine.Name) threw while testing a password: $($_.Exception.Message)")
                     continue
                 }
 
                 if ($testOk) {
-                    [void]$ResultBag.TryAdd("winner", @{ Password = $pw; Engine = $engine; Index = $i })
+                    [void]$ResultBag.TryAdd("winner", @{ Password = $pw; Engine = $engine })
                     $CancelSource.Cancel()
                     break
                 }
@@ -91,26 +92,20 @@ function Invoke-ParallelPasswordTest {
         EncryptionCapableExtensions = $EncryptionCapableExtensions
     }
 
-    $chunkSize = [math]::Ceiling($Passwords.Count / $MaxThreads)
-    $pool = New-ExtractionRunspacePool -MaxThreads $MaxThreads
+    $workerCount = [math]::Min([int]$MaxThreads, [int]$Passwords.Count)
+    $pool = New-ExtractionRunspacePool -MaxThreads $workerCount
 
     try {
-        for ($t = 0; $t -lt $MaxThreads; $t++) {
-            $start = $t * $chunkSize
-            $end = [math]::Min($start + $chunkSize, $Passwords.Count)
-            if ($start -ge $Passwords.Count) { break }
-
+        for ($t = 0; $t -lt $workerCount; $t++) {
             $ps = [PowerShell]::Create()
             $ps.RunspacePool = $pool
             [void]$ps.AddScript($scriptBlock)
-            [void]$ps.AddArgument($Passwords)
+            [void]$ps.AddArgument($queue)
             [void]$ps.AddArgument($EnginePlan)
             [void]$ps.AddArgument($Archive)
             [void]$ps.AddArgument($OutputDir)
             [void]$ps.AddArgument($SeparateFolders)
             [void]$ps.AddArgument($Timeout)
-            [void]$ps.AddArgument($start)
-            [void]$ps.AddArgument($end)
             [void]$ps.AddArgument($cancelSource)
             [void]$ps.AddArgument($resultBag)
             [void]$ps.AddArgument($errorBag)

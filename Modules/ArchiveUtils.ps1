@@ -305,20 +305,29 @@ function Resolve-OutputDir {
 }
 
 function Find-ArchivesFromInputs {
-    param([string[]]$Paths)
+    param(
+        [string[]]$Paths,
+        [int]$Limit = 0
+    )
 
-    $archives = @()
-    $skipped = @()
+    $archives = New-Object System.Collections.Generic.List[string]
+    $skipped = New-Object System.Collections.Generic.List[string]
+    $limitHit = $false
 
     foreach ($path in $Paths) {
         if ([string]::IsNullOrWhiteSpace($path)) {
             continue
         }
 
+        if ($Limit -gt 0 -and $archives.Count -ge $Limit) {
+            $limitHit = $true
+            break
+        }
+
         $cleanPath = $path.Trim('"')
 
         if (!(Test-Path -LiteralPath $cleanPath)) {
-            $skipped += $cleanPath
+            [void]$skipped.Add($cleanPath)
             Write-Log "Missing path skipped: $cleanPath" "WARN"
             continue
         }
@@ -332,19 +341,46 @@ function Find-ArchivesFromInputs {
 
             $recursive = Read-YesNo "Scan this folder recursively for archives?" $false
 
-            if ($recursive) {
-                $files = Get-ChildItem -LiteralPath $item.FullName -File -Recurse -ErrorAction SilentlyContinue
-            } else {
-                $files = Get-ChildItem -LiteralPath $item.FullName -File -ErrorAction SilentlyContinue
-            }
+            $stack = New-Object System.Collections.Generic.Stack[string]
+            $stack.Push($item.FullName)
 
-            foreach ($file in $files) {
-                if ((Test-IsSupportedArchiveName $file.FullName) -and (Test-IsFirstVolumeOrNormalArchive $file.FullName)) {
-                    $archives += $file.FullName
-                    Write-Log "Archive detected: $($file.FullName)"
-                } elseif (Test-IsSupportedArchiveName $file.FullName) {
-                    $skipped += $file.FullName
-                    Write-Log "Non-entry split skipped: $($file.FullName)" "WARN"
+            :enumLoop while ($stack.Count -gt 0) {
+                if ($Limit -gt 0 -and $archives.Count -ge $Limit) {
+                    $limitHit = $true
+                    break
+                }
+
+                $dir = $stack.Pop()
+
+                $childFiles = $null
+                try { $childFiles = [IO.Directory]::EnumerateFiles($dir) } catch {
+                    Write-Log "Cannot enumerate files in $dir : $($_.Exception.Message)" "WARN"
+                }
+
+                if ($childFiles) {
+                    foreach ($filePath in $childFiles) {
+                        if ((Test-IsSupportedArchiveName $filePath) -and (Test-IsFirstVolumeOrNormalArchive $filePath)) {
+                            [void]$archives.Add($filePath)
+                            Write-Log "Archive detected: $filePath"
+                            if ($Limit -gt 0 -and $archives.Count -ge $Limit) {
+                                $limitHit = $true
+                                break enumLoop
+                            }
+                        } elseif (Test-IsSupportedArchiveName $filePath) {
+                            [void]$skipped.Add($filePath)
+                            Write-Log "Non-entry split skipped: $filePath" "WARN"
+                        }
+                    }
+                }
+
+                if ($recursive) {
+                    try {
+                        foreach ($sub in [IO.Directory]::EnumerateDirectories($dir)) {
+                            $stack.Push($sub)
+                        }
+                    } catch {
+                        Write-Log "Cannot enumerate subdirectories in $dir : $($_.Exception.Message)" "WARN"
+                    }
                 }
             }
 
@@ -352,26 +388,34 @@ function Find-ArchivesFromInputs {
         }
 
         if ((Test-IsSupportedArchiveName $item.FullName) -and (Test-IsFirstVolumeOrNormalArchive $item.FullName)) {
-            $archives += $item.FullName
+            [void]$archives.Add($item.FullName)
             Write-Log "Archive detected: $($item.FullName)"
         } else {
-            $skipped += $item.FullName
+            [void]$skipped.Add($item.FullName)
             Write-Log "Skipped input: $($item.FullName)" "WARN"
         }
     }
 
-    $promoted = Find-OrphanedSplitEntries -Archives $archives -Skipped $skipped
+    if ($limitHit) {
+        Write-Log "Archive scan limit ($Limit) reached; enumeration stopped early." "WARN"
+        Write-Both "Note: scan limit of $Limit archives reached; additional files were not enumerated." "WARN" "Yellow"
+    }
+
+    $archiveArray = $archives.ToArray()
+    $skippedArray = $skipped.ToArray()
+
+    $promoted = Find-OrphanedSplitEntries -Archives $archiveArray -Skipped $skippedArray
     if ($promoted.Count -gt 0) {
         foreach ($entry in $promoted) {
-            $archives += $entry
-            $skipped = @($skipped | Where-Object { $_ -ne $entry })
+            [void]$archives.Add($entry)
+            $skippedArray = @($skippedArray | Where-Object { $_ -ne $entry })
             Write-Log "Promoted orphaned split entry: $entry"
         }
     }
 
     return @{
-        Archives = @($archives | Sort-Object -Unique)
-        Skipped = @($skipped | Sort-Object -Unique)
+        Archives = @($archives.ToArray() | Sort-Object -Unique)
+        Skipped = @($skippedArray | Sort-Object -Unique)
     }
 }
 
