@@ -177,6 +177,8 @@ function Invoke-ParallelArchiveExtraction {
         )
 
         $outputDir = $null
+        $archiveStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+        $engineCandidates = @()
 
         try {
             foreach ($key in $ConfigVars.Keys) {
@@ -196,13 +198,16 @@ function Invoke-ParallelArchiveExtraction {
             $archiveDir = Split-Path $Archive -Parent
 
             if (-not (Test-FileAccessible $Archive)) {
-                $Results.Add([PSCustomObject]@{ Archive = $Archive; Status = "Failed"; Reason = "Inaccessible"; Password = $null; OutputDir = $null })
+                $archiveStopwatch.Stop()
+                $Results.Add([PSCustomObject]@{ Archive = $Archive; Status = "Failed"; Reason = "Inaccessible"; Password = $null; OutputDir = $null; Engine = $null; EnginesInPlan = @(); ElapsedMs = $archiveStopwatch.ElapsedMilliseconds })
                 return
             }
 
             $enginePlan = @(Get-EnginePlanForArchive -Archive $Archive -SevenZip $SevenZip -PeaZip7z $PeaZip7z -WinRar $WinRar)
+            $engineCandidates = @($enginePlan | ForEach-Object { $_.Name })
             if ($enginePlan.Count -eq 0) {
-                $Results.Add([PSCustomObject]@{ Archive = $Archive; Status = "Failed"; Reason = "NoEngine"; Password = $null; OutputDir = $null })
+                $archiveStopwatch.Stop()
+                $Results.Add([PSCustomObject]@{ Archive = $Archive; Status = "Failed"; Reason = "NoEngine"; Password = $null; OutputDir = $null; Engine = $null; EnginesInPlan = @(); ElapsedMs = $archiveStopwatch.ElapsedMilliseconds })
                 return
             }
 
@@ -225,11 +230,13 @@ function Invoke-ParallelArchiveExtraction {
                 foreach ($engine in $enginePlan) {
                     $ok = Try-EnginePassword -EngineName $engine.Name -EnginePath $engine.Path -Archive $Archive -Password "" -OutputDir $outputDir -CanClearFailedOutput $SeparateFolders -OmitPasswordArg $true -Timeout $ConfigVars["ExtractionTimeoutSeconds"]
                     if ($ok) {
-                        $Results.Add([PSCustomObject]@{ Archive = $Archive; Status = "NoPassword"; Reason = $null; Password = $null; OutputDir = $outputDir })
+                        $archiveStopwatch.Stop()
+                        $Results.Add([PSCustomObject]@{ Archive = $Archive; Status = "NoPassword"; Reason = $null; Password = $null; OutputDir = $outputDir; Engine = $engine.Name; EnginesInPlan = $engineCandidates; ElapsedMs = $archiveStopwatch.ElapsedMilliseconds })
                         return
                     }
                 }
-                $Results.Add([PSCustomObject]@{ Archive = $Archive; Status = "Failed"; Reason = "ExtractionFailed"; Password = $null; OutputDir = $outputDir })
+                $archiveStopwatch.Stop()
+                $Results.Add([PSCustomObject]@{ Archive = $Archive; Status = "Failed"; Reason = "ExtractionFailed"; Password = $null; OutputDir = $outputDir; Engine = $null; EnginesInPlan = $engineCandidates; ElapsedMs = $archiveStopwatch.ElapsedMilliseconds })
                 Remove-EmptyOutputDir -OutputDir $outputDir -SeparateFolders $SeparateFolders
                 return
             }
@@ -241,19 +248,22 @@ function Invoke-ParallelArchiveExtraction {
                         $extractOk = Try-EnginePassword -EngineName $engine.Name -EnginePath $engine.Path -Archive $Archive -Password $Pw -OutputDir $outputDir -CanClearFailedOutput $SeparateFolders -Timeout $ConfigVars["ExtractionTimeoutSeconds"] -TestOnly $false
                         if ($extractOk) {
                             Save-PasswordToCache $Pw
-                            $Results.Add([PSCustomObject]@{ Archive = $Archive; Status = "Succeeded"; Reason = $null; Password = $Pw; OutputDir = $outputDir })
+                            $archiveStopwatch.Stop()
+                            $Results.Add([PSCustomObject]@{ Archive = $Archive; Status = "Succeeded"; Reason = $null; Password = $Pw; OutputDir = $outputDir; Engine = $engine.Name; EnginesInPlan = $engineCandidates; ElapsedMs = $archiveStopwatch.ElapsedMilliseconds })
                             return
                         }
                     }
                 }
             }
 
-            $Results.Add([PSCustomObject]@{ Archive = $Archive; Status = "Failed"; Reason = "NoPassword"; Password = $null; OutputDir = $outputDir })
+            $archiveStopwatch.Stop()
+            $Results.Add([PSCustomObject]@{ Archive = $Archive; Status = "Failed"; Reason = "WrongPassword"; Password = $null; OutputDir = $outputDir; Engine = $null; EnginesInPlan = $engineCandidates; ElapsedMs = $archiveStopwatch.ElapsedMilliseconds })
             Remove-EmptyOutputDir -OutputDir $outputDir -SeparateFolders $SeparateFolders
         } catch {
             $errMsg = "WorkerException: $($_.Exception.Message)"
             try { Write-Log "Worker exception extracting $Archive : $errMsg" "ERROR" } catch {}
-            $Results.Add([PSCustomObject]@{ Archive = $Archive; Status = "Failed"; Reason = $errMsg; Password = $null; OutputDir = $outputDir })
+            $archiveStopwatch.Stop()
+            $Results.Add([PSCustomObject]@{ Archive = $Archive; Status = "Failed"; Reason = $errMsg; Password = $null; OutputDir = $outputDir; Engine = $null; EnginesInPlan = $engineCandidates; ElapsedMs = $archiveStopwatch.ElapsedMilliseconds })
         }
     }
 
@@ -311,6 +321,10 @@ function Invoke-ParallelArchiveExtraction {
     } finally {
         $pool.Close()
         $pool.Dispose()
+
+        try { Merge-WorkerLogs -MainLogPath $RunLogPath } catch {
+            try { Write-Log "Merge-WorkerLogs failed: $($_.Exception.Message)" "WARN" } catch {}
+        }
     }
 
     return @($results)
