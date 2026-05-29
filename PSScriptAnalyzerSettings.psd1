@@ -9,10 +9,10 @@
     #   - PSUseShouldProcessForStateChangingFunctions: the tool is not a module
     #     of reusable cmdlets and does not implement -WhatIf/-Confirm.
     #
-    # CI fails on Error-severity findings only; Warnings are reported but
+    # CI fails on ParseError/Error-severity findings; Warnings are reported but
     # non-blocking for now (tightening is a planned follow-up).
 
-    Severity     = @('Error', 'Warning')
+    Severity     = @('ParseError', 'Error', 'Warning')
 
     ExcludeRules = @(
         'PSAvoidUsingWriteHost',

@@ -27,10 +27,11 @@ jobs:
         run: |
           $results = Invoke-ScriptAnalyzer -Path . -Recurse -Settings ./PSScriptAnalyzerSettings.psd1
           if ($results) { $results | Format-Table -AutoSize | Out-String | Write-Host }
-          $errors = @($results | Where-Object { $_.Severity -eq 'Error' })
-          Write-Host "Analyzer findings: $(@($results).Count) total, $($errors.Count) error(s)."
-          if ($errors.Count -gt 0) {
-            throw "PSScriptAnalyzer reported $($errors.Count) error-severity finding(s)."
+          # ParseError covers files with invalid syntax; Error covers blocking rules.
+          $blocking = @($results | Where-Object { $_.Severity -in @('ParseError', 'Error') })
+          Write-Host "Analyzer findings: $(@($results).Count) total, $($blocking.Count) blocking (ParseError/Error)."
+          if ($blocking.Count -gt 0) {
+            throw "PSScriptAnalyzer reported $($blocking.Count) blocking finding(s) (ParseError/Error)."
           }
 
   test:
