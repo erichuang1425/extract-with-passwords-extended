@@ -15,19 +15,21 @@ BeforeAll {
 Describe 'Get-FileEncoding' {
     It 'detects a UTF-8 BOM' {
         $f = Join-Path $TestDrive 'utf8.txt'
-        [IO.File]::WriteAllBytes($f, ([byte[]](0xEF, 0xBB, 0xBF) + [Text.Encoding]::UTF8.GetBytes('pw')))
+        $bytes = [byte[]]@(0xEF, 0xBB, 0xBF) + [Text.Encoding]::UTF8.GetBytes('pw')
+        [IO.File]::WriteAllBytes($f, [byte[]]$bytes)
         (Get-FileEncoding -Path $f).WebName | Should -Be ([Text.Encoding]::UTF8.WebName)
     }
 
     It 'detects a UTF-16 LE BOM' {
         $f = Join-Path $TestDrive 'utf16le.txt'
-        [IO.File]::WriteAllBytes($f, ([byte[]](0xFF, 0xFE) + [Text.Encoding]::Unicode.GetBytes('pw')))
+        $bytes = [byte[]]@(0xFF, 0xFE) + [Text.Encoding]::Unicode.GetBytes('pw')
+        [IO.File]::WriteAllBytes($f, [byte[]]$bytes)
         (Get-FileEncoding -Path $f).WebName | Should -Be ([Text.Encoding]::Unicode.WebName)
     }
 
     It 'defaults to UTF-8 when there is no BOM' {
         $f = Join-Path $TestDrive 'nobom.txt'
-        [IO.File]::WriteAllBytes($f, [Text.Encoding]::ASCII.GetBytes('plain'))
+        [IO.File]::WriteAllBytes($f, [byte[]][Text.Encoding]::ASCII.GetBytes('plain'))
         (Get-FileEncoding -Path $f).WebName | Should -Be ([Text.Encoding]::UTF8.WebName)
     }
 }
@@ -83,7 +85,7 @@ Describe 'Get-Passwords' {
             'alpha', '# a comment', '', 'beta', 'alpha', '  gamma  '
         )
         $result = @(Get-Passwords)
-        $result | Should -Be @('alpha', 'beta', 'gamma')
+        ($result -join ',') | Should -Be 'alpha,beta,gamma'
     }
 
     It 'prepends the empty-password slot when TryNoPasswordFirst is enabled' {
