@@ -3,7 +3,7 @@
 # Single source of truth for the application version. All banners and log lines
 # read from this; keep the installer's own $AppVersion (it does not dot-source
 # this module at runtime) in lockstep when bumping.
-$AppVersion = "4.1.0"
+$AppVersion = "4.1.1"
 
 $TryNoPasswordFirst = $true
 $AskBeforeExtracting = $true

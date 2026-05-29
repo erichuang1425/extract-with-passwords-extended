@@ -164,10 +164,14 @@ function Invoke-NestedExtractionPass {
                 Write-Status "Nested FAILED: no matching password for $archiveName" "fail"
                 Write-Log "Nested failure: $archive" "ERROR"
                 Remove-EmptyOutputDir -OutputDir $outputDir -SeparateFolders $true
+                $nestedReason = Get-LastEngineFailureType -ArchiveKnownEncrypted $isEncryptable
+                if ([string]::IsNullOrEmpty($nestedReason) -or $nestedReason -in @("Success", "Unknown", "WrongPassword")) {
+                    $nestedReason = if ($isEncryptable) { "WrongPassword" } else { "ExtractionFailed" }
+                }
                 $results.Add([PSCustomObject]@{
                     Archive = $archive; Status = "Failed"; OutputDir = $null
                     Engine = $null; Password = $null; ElapsedMs = $sw.ElapsedMilliseconds
-                    Depth = $depth; IsNested = $true; Reason = "WrongPassword"; EnginesInPlan = $planNames
+                    Depth = $depth; IsNested = $true; Reason = $nestedReason; EnginesInPlan = $planNames
                 })
             }
         }

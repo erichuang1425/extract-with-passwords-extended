@@ -45,7 +45,9 @@ function Invoke-ParallelPasswordTest {
             Set-Variable -Name $key -Value $ConfigVars[$key] -Scope 0
         }
 
-        $RunLogPath = $ConfigVars["RunLogPath"]
+        # Each worker writes to its own per-thread log to avoid concurrent
+        # Add-Content contention on the shared main log; merged in the finally.
+        $RunLogPath = $ConfigVars["RunLogPath"] -replace '\.log$', "_worker_$([System.Threading.Thread]::CurrentThread.ManagedThreadId).log"
 
         . "$ModulesDir\Logging.ps1"
         . "$ModulesDir\ArchiveUtils.ps1"
@@ -128,6 +130,10 @@ function Invoke-ParallelPasswordTest {
         $pool.Close()
         $pool.Dispose()
         $cancelSource.Dispose()
+
+        try { Merge-WorkerLogs -MainLogPath $RunLogPath } catch {
+            try { Write-Log "Merge-WorkerLogs failed: $($_.Exception.Message)" "WARN" } catch {}
+        }
     }
 
     if ($errorBag.Count -gt 0) {
@@ -231,7 +237,9 @@ function Invoke-ParallelArchiveExtraction {
                     }
                 }
                 $archiveStopwatch.Stop()
-                $Results.Add([PSCustomObject]@{ Archive = $Archive; Status = "Failed"; Reason = "ExtractionFailed"; Password = $null; OutputDir = $outputDir; Engine = $null; EnginesInPlan = $engineCandidates; ElapsedMs = $archiveStopwatch.ElapsedMilliseconds })
+                $failReason = Get-LastEngineFailureType
+                if ([string]::IsNullOrEmpty($failReason) -or $failReason -in @("Success", "Unknown", "WrongPassword")) { $failReason = "ExtractionFailed" }
+                $Results.Add([PSCustomObject]@{ Archive = $Archive; Status = "Failed"; Reason = $failReason; Password = $null; OutputDir = $outputDir; Engine = $null; EnginesInPlan = $engineCandidates; ElapsedMs = $archiveStopwatch.ElapsedMilliseconds })
                 Remove-EmptyOutputDir -OutputDir $outputDir -SeparateFolders $SeparateFolders
                 return
             }
@@ -252,7 +260,9 @@ function Invoke-ParallelArchiveExtraction {
             }
 
             $archiveStopwatch.Stop()
-            $Results.Add([PSCustomObject]@{ Archive = $Archive; Status = "Failed"; Reason = "WrongPassword"; Password = $null; OutputDir = $outputDir; Engine = $null; EnginesInPlan = $engineCandidates; ElapsedMs = $archiveStopwatch.ElapsedMilliseconds })
+            $failReason = Get-LastEngineFailureType -ArchiveKnownEncrypted $true
+            if ([string]::IsNullOrEmpty($failReason) -or $failReason -in @("Success", "Unknown")) { $failReason = "WrongPassword" }
+            $Results.Add([PSCustomObject]@{ Archive = $Archive; Status = "Failed"; Reason = $failReason; Password = $null; OutputDir = $outputDir; Engine = $null; EnginesInPlan = $engineCandidates; ElapsedMs = $archiveStopwatch.ElapsedMilliseconds })
             Remove-EmptyOutputDir -OutputDir $outputDir -SeparateFolders $SeparateFolders
         } catch {
             $errMsg = "WorkerException: $($_.Exception.Message)"
@@ -277,6 +287,7 @@ function Invoke-ParallelArchiveExtraction {
         ExistingOutputBehavior = $ExistingOutputBehavior
         UsePasswordCache = $UsePasswordCache
         PasswordCacheRetentionDays = $PasswordCacheRetentionDays
+        CacheFile = $CacheFile
         CheckEncryptionBeforeCycling = $CheckEncryptionBeforeCycling
         TestOnlyFirst = $TestOnlyFirst
         TryNoPasswordFirst = $TryNoPasswordFirst
