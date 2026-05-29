@@ -33,18 +33,15 @@ function Get-FileEncoding {
 }
 
 function Get-CacheMutexName {
-    # Stable, per-cache-file mutex name. Hash the full path so distinct cache
-    # files don't share a lock and the name carries no invalid characters.
-    # "Local\" scopes the lock to the current logon session.
+    # Stable, per-cache-file mutex name. Reduce the path to a deterministic,
+    # mutex-name-safe token (alphanumerics kept, everything else -> '_') without
+    # a crypto-hash dependency. Distinct cache files get distinct names; the
+    # worst case (two paths sharing the trailing token) is a shared lock, which
+    # is merely conservative, never incorrect. "Local\" scopes it to the session.
     $key = if ($CacheFile) { ([string]$CacheFile).ToLowerInvariant() } else { "default" }
-    $md5 = [System.Security.Cryptography.MD5]::Create()
-    try {
-        $bytes = $md5.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($key))
-    } finally {
-        $md5.Dispose()
-    }
-    $hash = ([System.BitConverter]::ToString($bytes)).Replace("-", "")
-    return "Local\TryPwExtract_PwCache_$hash"
+    $safe = $key -replace '[^a-z0-9]', '_'
+    if ($safe.Length -gt 200) { $safe = $safe.Substring($safe.Length - 200) }
+    return "Local\TryPwExtract_PwCache_$safe"
 }
 
 function Enter-CacheLock {
