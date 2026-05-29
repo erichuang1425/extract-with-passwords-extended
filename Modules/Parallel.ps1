@@ -29,6 +29,7 @@ function Invoke-ParallelPasswordTest {
     $cancelSource = New-Object System.Threading.CancellationTokenSource
     $resultBag = [System.Collections.Concurrent.ConcurrentDictionary[string, object]]::new()
     $errorBag = [System.Collections.Concurrent.ConcurrentBag[string]]::new()
+    $failureBag = [System.Collections.Concurrent.ConcurrentBag[object]]::new()
     $queue = New-Object 'System.Collections.Concurrent.ConcurrentQueue[string]'
     foreach ($pw in $Passwords) { $queue.Enqueue([string]$pw) }
     $jobs = @()
@@ -37,7 +38,7 @@ function Invoke-ParallelPasswordTest {
         param(
             $Queue, $EnginePlan, $Archive, $OutputDir,
             $SeparateFolders, $Timeout,
-            $CancelSource, $ResultBag, $ErrorBag, $ModulesDir,
+            $CancelSource, $ResultBag, $ErrorBag, $FailureBag, $ModulesDir,
             $ConfigVars
         )
 
@@ -79,6 +80,13 @@ function Invoke-ParallelPasswordTest {
                 }
             }
         }
+
+        # Surface this worker's last engine result so the parent can classify the
+        # failure type (timeout/corrupt/...) when no password is found; only read
+        # by the parent when there is no winner.
+        if ($script:LastEngineResult) {
+            [void]$FailureBag.Add($script:LastEngineResult)
+        }
     }
 
     $configVars = @{
@@ -111,6 +119,7 @@ function Invoke-ParallelPasswordTest {
             [void]$ps.AddArgument($cancelSource)
             [void]$ps.AddArgument($resultBag)
             [void]$ps.AddArgument($errorBag)
+            [void]$ps.AddArgument($failureBag)
             [void]$ps.AddArgument($ModulesDir)
             [void]$ps.AddArgument($configVars)
 
@@ -146,6 +155,22 @@ function Invoke-ParallelPasswordTest {
     $winner = $null
     if ($resultBag.ContainsKey("winner")) {
         $winner = $resultBag["winner"]
+    }
+
+    # Carry a representative engine failure back to this (parent) runspace so the
+    # caller's Get-LastEngineFailureType classifies *this* archive rather than a
+    # stale prior result. Prefer a hard failure (timeout/corrupt/...) over a
+    # plain wrong-password verdict.
+    $script:LastEngineResult = $null
+    if (-not $winner -and $failureBag.Count -gt 0) {
+        $chosen = $null
+        foreach ($fr in $failureBag) {
+            if ($null -eq $fr) { continue }
+            if ($null -eq $chosen) { $chosen = $fr }
+            $type = (Get-ExtractionErrorType -ExitCode ([int]$fr.ExitCode) -Output @($fr.Output) -ArchiveKnownEncrypted $true).Type
+            if ($type -notin @("WrongPassword", "Unknown", "Success")) { $chosen = $fr; break }
+        }
+        $script:LastEngineResult = $chosen
     }
 
     return $winner
