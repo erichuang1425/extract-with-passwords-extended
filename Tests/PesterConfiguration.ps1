@@ -7,6 +7,7 @@
 # (coverage.xml) for the pure-logic modules, and exits non-zero on failure.
 
 param(
+    [string[]]$Path       = @($PSScriptRoot),
     [string]$ResultsPath  = 'testResults.xml',
     [string]$CoveragePath = 'coverage.xml'
 )
@@ -19,7 +20,7 @@ $testsDir   = $PSScriptRoot
 $modulesDir = Join-Path (Split-Path -Parent $testsDir) 'Modules'
 
 $config = New-PesterConfiguration
-$config.Run.Path                  = $testsDir
+$config.Run.Path                  = $Path
 $config.Run.Exit                  = $true
 $config.Output.Verbosity          = 'Detailed'
 $config.TestResult.Enabled        = $true
