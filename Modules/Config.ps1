@@ -1,5 +1,10 @@
 # Config.ps1 — Default configuration and config file reader
 
+# Single source of truth for the application version. All banners and log lines
+# read from this; keep the installer's own $AppVersion (it does not dot-source
+# this module at runtime) in lockstep when bumping.
+$AppVersion = "4.1.0"
+
 $TryNoPasswordFirst = $true
 $AskBeforeExtracting = $true
 $AskSeparateFolders = $true
@@ -42,6 +47,10 @@ $MaxParallelPasswords = 1
 $MaxArchivesPerScan = 0
 $PreferGui = $false
 
+$ExtractNestedArchives = $false
+$MaxNestedDepth = 1
+$DeleteNestedArchiveAfterExtract = $false
+
 $EncryptionCapableExtensions = @{
     '.zip' = $true; '.zipx' = $true; '.7z' = $true; '.rar' = $true
 }
@@ -58,6 +67,7 @@ function Test-ConfigSane {
         "MaxParallelArchives"            = @{ Min = 1;    Max = 32; Default = 1 }
         "MaxParallelPasswords"           = @{ Min = 1;    Max = 32; Default = 1 }
         "MaxArchivesPerScan"             = @{ Min = 0;    Max = 1000000; Default = 0 }
+        "MaxNestedDepth"                 = @{ Min = 0;    Max = 10; Default = 1 }
     }
 
     foreach ($name in $intClamps.Keys) {
@@ -145,6 +155,9 @@ function Read-Config {
             "maxParallelPasswords" = "MaxParallelPasswords"
             "maxArchivesPerScan" = "MaxArchivesPerScan"
             "preferGui" = "PreferGui"
+            "extractNestedArchives" = "ExtractNestedArchives"
+            "maxNestedDepth" = "MaxNestedDepth"
+            "deleteNestedArchiveAfterExtract" = "DeleteNestedArchiveAfterExtract"
         }
 
         foreach ($jsonKey in $map.Keys) {
