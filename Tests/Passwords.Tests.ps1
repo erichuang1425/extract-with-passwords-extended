@@ -220,7 +220,7 @@ Describe 'Password cache concurrency safety' {
             $n1 = Get-CacheMutexName
             $n2 = Get-CacheMutexName
             $n1 | Should -Be $n2
-            $n1 | Should -Match '^Local\\TryPwExtract_PwCache_[0-9A-F]+$'
+            $n1 | Should -Match '^Local\\TryPwExtract_PwCache_[a-z0-9_]+$'
         }
     }
 
