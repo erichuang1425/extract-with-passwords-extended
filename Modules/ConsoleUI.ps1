@@ -185,7 +185,7 @@ function Show-InteractiveMenu {
     Write-Host "     Archive Password-List Extractor" -ForegroundColor White -NoNewline
     Write-Host "               |" -ForegroundColor DarkCyan
     Write-Host "  |" -ForegroundColor DarkCyan -NoNewline
-    Write-Host "         Multi-Engine  |  v4.0" -ForegroundColor DarkGray -NoNewline
+    Write-Host "         Multi-Engine  |  v$AppVersion" -ForegroundColor DarkGray -NoNewline
     Write-Host "                      |" -ForegroundColor DarkCyan
     Write-Host "  |                                                      |" -ForegroundColor DarkCyan
     Write-Host "  +------------------------------------------------------+" -ForegroundColor DarkCyan

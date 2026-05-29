@@ -46,6 +46,7 @@ if ($LogRetentionDays -gt 0) {
 . "$ModulesDir\ArchiveUtils.ps1"
 . "$ModulesDir\Extraction.ps1"
 . "$ModulesDir\Passwords.ps1"
+. "$ModulesDir\NestedExtraction.ps1"
 . "$ModulesDir\Parallel.ps1"
 . "$ModulesDir\WpfGui.ps1"
 
@@ -119,12 +120,12 @@ try {
     Write-Host "     Archive Password-List Extractor" -ForegroundColor White -NoNewline
     Write-Host "               |" -ForegroundColor DarkCyan
     Write-Host "  |" -ForegroundColor DarkCyan -NoNewline
-    Write-Host "         Multi-Engine  |  v4.0" -ForegroundColor DarkGray -NoNewline
+    Write-Host "         Multi-Engine  |  v$AppVersion" -ForegroundColor DarkGray -NoNewline
     Write-Host "                      |" -ForegroundColor DarkCyan
     Write-Host "  |                                                      |" -ForegroundColor DarkCyan
     Write-Host "  +------------------------------------------------------+" -ForegroundColor DarkCyan
     Write-Host ""
-    Write-Log "Archive password-list extractor - multi engine v4.0"
+    Write-Log "Archive password-list extractor - multi engine v$AppVersion"
     Write-Both "" "INFO"
     Write-Status "Log: $RunLogPath" "dim"
     Write-Both "" "INFO"
@@ -931,6 +932,76 @@ try {
     $totalStopwatch.Stop()
 
     } # end of sequential else block
+
+    # ============================================================
+    # Nested archive extraction (post-pass)
+    # ============================================================
+
+    $nestedFound = 0
+    $nestedExtracted = 0
+    $nestedFailed = 0
+    $nestedMaxDepth = 0
+
+    if ($ExtractNestedArchives -and $MaxNestedDepth -ge 1 -and @($OutputFolders).Count -gt 0) {
+        Write-Section "Nested archives"
+        Write-Status "Scanning $(@($OutputFolders | Sort-Object -Unique).Count) output folder(s) for nested archives (max depth $MaxNestedDepth)..." "info"
+
+        $nestedResults = @(Invoke-NestedExtractionPass `
+            -SeedFolders $OutputFolders `
+            -Passwords $Passwords `
+            -SevenZip $SevenZip `
+            -PeaZip7z $PeaZip7z `
+            -WinRar $WinRar `
+            -MaxDepth $MaxNestedDepth `
+            -Timeout $ExtractionTimeoutSeconds `
+            -InitialLastPassword $lastSuccessfulPassword)
+
+        foreach ($r in $nestedResults) {
+            $nestedFound++
+            if ($r.Depth -gt $nestedMaxDepth) { $nestedMaxDepth = $r.Depth }
+
+            if ($null -ne $r.ElapsedMs -and $r.ElapsedMs -gt 0) {
+                $ArchiveTimingsMs += [long]$r.ElapsedMs
+            }
+
+            foreach ($name in @($r.EnginesInPlan)) {
+                if (-not $EngineStats.ContainsKey($name)) { $EngineStats[$name] = @{ Successes = 0; Attempts = 0 } }
+                $EngineStats[$name].Attempts++
+            }
+
+            if (($r.Status -eq "Succeeded" -or $r.Status -eq "NoPassword")) {
+                $nestedExtracted++
+                if ($r.Engine) {
+                    if (-not $EngineStats.ContainsKey($r.Engine)) { $EngineStats[$r.Engine] = @{ Successes = 0; Attempts = 0 } }
+                    $EngineStats[$r.Engine].Successes++
+                }
+                if ($r.OutputDir) { $OutputFolders += $r.OutputDir }
+                if ($r.Status -eq "Succeeded" -and $r.Password) {
+                    if ($CachedPasswordSet.ContainsKey($r.Password)) { $CacheHitCount++ } else { $CacheMissCount++ }
+                }
+            } else {
+                $nestedFailed++
+                $reason = if ($r.Reason) { [string]$r.Reason } else { "Unknown" }
+                if (-not $FailureReasons.ContainsKey($reason)) { $FailureReasons[$reason] = 0 }
+                $FailureReasons[$reason]++
+            }
+        }
+
+        Write-Both "" "INFO"
+        if ($nestedFound -eq 0) {
+            Write-Status "No nested archives found." "dim"
+        } else {
+            $nestedBoxWidth = 60
+            $nestedBorder = "    +" + ("-" * ($nestedBoxWidth - 2)) + "+"
+            Write-Host $nestedBorder -ForegroundColor DarkCyan
+            Write-Host ("    | {0,-56} |" -f "Nested archives found:     $nestedFound") -ForegroundColor Gray
+            Write-Host ("    | {0,-56} |" -f "Nested extracted:          $nestedExtracted") -ForegroundColor Green
+            Write-Host ("    | {0,-56} |" -f "Nested failed:             $nestedFailed") -ForegroundColor $(if ($nestedFailed -gt 0) { "Red" } else { "Gray" })
+            Write-Host ("    | {0,-56} |" -f "Max nesting depth reached: $nestedMaxDepth") -ForegroundColor Gray
+            Write-Host $nestedBorder -ForegroundColor DarkCyan
+        }
+        Write-Log "Nested pass: found=$nestedFound extracted=$nestedExtracted failed=$nestedFailed maxDepth=$nestedMaxDepth"
+    }
 
     # ============================================================
     # Summary

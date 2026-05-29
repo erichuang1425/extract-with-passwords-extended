@@ -419,6 +419,46 @@ function Find-ArchivesFromInputs {
     }
 }
 
+function Find-NestedArchives {
+    param([string]$Root)
+
+    $archives = New-Object System.Collections.Generic.List[string]
+
+    if ([string]::IsNullOrWhiteSpace($Root) -or !(Test-Path -LiteralPath $Root)) {
+        return @()
+    }
+
+    $stack = New-Object System.Collections.Generic.Stack[string]
+    $stack.Push($Root)
+
+    while ($stack.Count -gt 0) {
+        $dir = $stack.Pop()
+
+        $childFiles = $null
+        try { $childFiles = [IO.Directory]::EnumerateFiles($dir) } catch {
+            Write-Log "Cannot enumerate nested files in $dir : $($_.Exception.Message)" "WARN"
+        }
+
+        if ($childFiles) {
+            foreach ($filePath in $childFiles) {
+                if ((Test-IsSupportedArchiveName $filePath) -and (Test-IsFirstVolumeOrNormalArchive $filePath)) {
+                    [void]$archives.Add($filePath)
+                }
+            }
+        }
+
+        try {
+            foreach ($sub in [IO.Directory]::EnumerateDirectories($dir)) {
+                $stack.Push($sub)
+            }
+        } catch {
+            Write-Log "Cannot enumerate nested subdirectories in $dir : $($_.Exception.Message)" "WARN"
+        }
+    }
+
+    return @($archives.ToArray() | Sort-Object -Unique)
+}
+
 function Find-OrphanedSplitEntries {
     param(
         [string[]]$Archives,

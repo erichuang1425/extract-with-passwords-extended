@@ -1,0 +1,36 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Package and publish
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build distribution ZIP
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          stage="dist/ArchivePwExtract-${tag}"
+          mkdir -p "$stage/Modules" "$stage/Resources"
+          cp TryPwExtract.ps1 Install-ArchivePwExtract.ps1 README.md LICENSE CHANGELOG.md "$stage/"
+          cp Modules/*.ps1 "$stage/Modules/"
+          cp Resources/*.xaml "$stage/Resources/"
+          (cd dist && zip -r "ArchivePwExtract-${tag}.zip" "ArchivePwExtract-${tag}")
+          ls -la dist
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }}
+          draft: true
+          generate_release_notes: true
+          files: dist/ArchivePwExtract-${{ github.ref_name }}.zip
