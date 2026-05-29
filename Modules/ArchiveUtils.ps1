@@ -251,7 +251,8 @@ function Test-MultiVolumeComplete {
 function Resolve-OutputDir {
     param(
         [string]$BaseDir,
-        [bool]$IsSharedOutput
+        [bool]$IsSharedOutput,
+        [string]$BehaviorOverride = ""
     )
 
     if ($IsSharedOutput) {
@@ -259,7 +260,11 @@ function Resolve-OutputDir {
         return $BaseDir
     }
 
-    switch ($ExistingOutputBehavior.ToLowerInvariant()) {
+    # Callers (e.g. nested extraction) may force a specific behavior to avoid
+    # the destructive "replace" default clobbering sibling directories.
+    $behavior = if ([string]::IsNullOrWhiteSpace($BehaviorOverride)) { $ExistingOutputBehavior } else { $BehaviorOverride }
+
+    switch ($behavior.ToLowerInvariant()) {
         "replace" {
             if (Test-Path -LiteralPath $BaseDir) {
                 Write-Log "Replacing existing output folder: $BaseDir" "WARN"

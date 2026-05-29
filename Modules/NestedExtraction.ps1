@@ -79,8 +79,11 @@ function Invoke-NestedExtractionPass {
                 continue
             }
 
+            # Force non-destructive "new" behavior: the nested archive lives inside the
+            # parent's output tree, so honoring a "replace" config could delete a
+            # sibling directory the parent already extracted (e.g. photos.zip vs photos/).
             $outputBase = Join-Path (Split-Path $archive -Parent) (Get-ArchiveBaseName $archive)
-            $outputDir = Resolve-OutputDir -BaseDir $outputBase -IsSharedOutput $false
+            $outputDir = Resolve-OutputDir -BaseDir $outputBase -IsSharedOutput $false -BehaviorOverride "new"
 
             $isEncryptable = Test-IsEncryptionCapable $archive
 

@@ -108,6 +108,22 @@ Describe 'Find-NestedArchives' {
     }
 }
 
+Describe 'Resolve-OutputDir BehaviorOverride' {
+    It 'forcing "new" preserves an existing directory and returns a unique sibling' {
+        $existing = Join-Path $TestDrive 'photos'
+        New-Item -ItemType Directory -Force -Path $existing | Out-Null
+        New-Item -ItemType File -Force -Path (Join-Path $existing 'keep.txt') | Out-Null
+
+        $resolved = Resolve-OutputDir -BaseDir $existing -IsSharedOutput $false -BehaviorOverride 'new'
+
+        # The pre-existing directory and its contents must survive.
+        Test-Path -LiteralPath (Join-Path $existing 'keep.txt') | Should -BeTrue
+        # A distinct, freshly created sibling is returned.
+        $resolved | Should -Not -Be $existing
+        Test-Path -LiteralPath $resolved | Should -BeTrue
+    }
+}
+
 Describe 'Sanitize-FileName' {
     It 'replaces Windows-invalid characters with underscores' {
         Sanitize-FileName 'a:b*c' | Should -Be 'a_b_c'
