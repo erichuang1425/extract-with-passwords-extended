@@ -1007,7 +1007,7 @@ try {
             $pct = if ($att -gt 0) { [math]::Round(($succ / $att) * 100) } else { 0 }
             $line = "{0,-22} {1} successes / {2} attempts ({3}%)" -f $name, $succ, $att, $pct
             Write-Host (_PadInside $line) -ForegroundColor Gray
-            Write-Log "Engine $name: $succ successes / $att attempts ($pct%)"
+            Write-Log "Engine ${name}: $succ successes / $att attempts ($pct%)"
         }
         Write-Host $borderLine -ForegroundColor DarkCyan
     }
