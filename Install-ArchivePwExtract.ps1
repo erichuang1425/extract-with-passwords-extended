@@ -22,7 +22,7 @@ $ErrorActionPreference = "Stop"
 
 # Keep in lockstep with $AppVersion in Modules/Config.ps1. The installer does not
 # dot-source Config.ps1 at runtime, so it carries its own copy of the version.
-$AppVersion = "4.1.0"
+$AppVersion = "4.1.1"
 
 if ($PSVersionTable.PSVersion.Major -lt 3) {
     Write-Host "PowerShell 3.0 or later is required. Current: $($PSVersionTable.PSVersion)" -ForegroundColor Red
