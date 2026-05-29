@@ -34,8 +34,12 @@ jobs:
           }
 
   test:
-    name: Test (Pester)
+    name: Test
     runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [Config, Logging, ConsoleUI, ArchiveUtils, Passwords]
     defaults:
       run:
         shell: pwsh
@@ -50,15 +54,15 @@ jobs:
             Install-Module Pester -MinimumVersion 5.5.0 -Force -SkipPublisherCheck -Scope CurrentUser
           }
 
-      - name: Run Pester tests
-        run: ./Tests/PesterConfiguration.ps1
+      - name: Run Pester tests (${{ matrix.suite }})
+        run: ./Tests/PesterConfiguration.ps1 -Path ./Tests/${{ matrix.suite }}.Tests.ps1 -ResultsPath "testResults-${{ matrix.suite }}.xml" -CoveragePath "coverage-${{ matrix.suite }}.xml"
 
       - name: Upload test artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: test-results
+          name: test-results-${{ matrix.suite }}
           path: |
-            testResults.xml
-            coverage.xml
+            testResults-${{ matrix.suite }}.xml
+            coverage-${{ matrix.suite }}.xml
           if-no-files-found: ignore
