@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+jobs:
+  lint:
+    name: Lint (PSScriptAnalyzer)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install PSScriptAnalyzer
+        run: |
+          Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+          if (-not (Get-Module -ListAvailable PSScriptAnalyzer)) {
+            Install-Module PSScriptAnalyzer -Force -Scope CurrentUser
+          }
+
+      - name: Run PSScriptAnalyzer
+        run: |
+          $results = Invoke-ScriptAnalyzer -Path . -Recurse -Settings ./PSScriptAnalyzerSettings.psd1
+          if ($results) { $results | Format-Table -AutoSize | Out-String | Write-Host }
+          # ParseError covers files with invalid syntax; Error covers blocking rules.
+          $blocking = @($results | Where-Object { $_.Severity -in @('ParseError', 'Error') })
+          Write-Host "Analyzer findings: $(@($results).Count) total, $($blocking.Count) blocking (ParseError/Error)."
+          if ($blocking.Count -gt 0) {
+            throw "PSScriptAnalyzer reported $($blocking.Count) blocking finding(s) (ParseError/Error)."
+          }
+
+  test:
+    name: Test
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [Config, Logging, ConsoleUI, ArchiveUtils, Passwords]
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Pester
+        run: |
+          Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+          if (-not (Get-Module -ListAvailable Pester | Where-Object { $_.Version -ge [version]'5.0.0' })) {
+            Install-Module Pester -MinimumVersion 5.5.0 -Force -SkipPublisherCheck -Scope CurrentUser
+          }
+
+      - name: Run Pester tests (${{ matrix.suite }})
+        run: ./Tests/PesterConfiguration.ps1 -Path ./Tests/${{ matrix.suite }}.Tests.ps1 -ResultsPath "testResults-${{ matrix.suite }}.xml" -CoveragePath "coverage-${{ matrix.suite }}.xml"
+
+      - name: Upload test artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ matrix.suite }}
+          path: |
+            testResults-${{ matrix.suite }}.xml
+            coverage-${{ matrix.suite }}.xml
+          if-no-files-found: ignore

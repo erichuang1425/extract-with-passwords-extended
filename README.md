@@ -1,5 +1,7 @@
 # Extract with Passwords Extended
 
+[![CI](https://github.com/erichuang1425/extract-with-passwords-extended/actions/workflows/ci.yml/badge.svg)](https://github.com/erichuang1425/extract-with-passwords-extended/actions/workflows/ci.yml)
+
 Windows context-menu tool for extracting encrypted archives using a password list. Supports multiple extraction engines with automatic fallback.
 
 ## Features
@@ -280,6 +282,32 @@ Diagnostic logs are saved to:
 ```
 
 Each run creates a timestamped log file. By default, repetitive engine errors (like "Wrong password" repeated per file) are condensed into a single summary line. Set `verboseEngineLogging` to `true` in config.json to restore full engine output. Passwords are always redacted in logs.
+
+## Development / Testing
+
+The pure-logic modules (config validation, password loading/caching, archive-name
+detection, command-line quoting, and console formatting) are covered by a
+[Pester](https://pester.dev) test suite under `Tests/`, and all scripts are linted
+with [PSScriptAnalyzer](https://github.com/PowerShell/PSScriptAnalyzer). Both run
+automatically in CI (`.github/workflows/ci.yml`) on every push and pull request.
+
+To run them locally on Windows (PowerShell 5.1 or PowerShell 7+):
+
+```powershell
+# One-time: install the tooling
+Install-Module Pester -MinimumVersion 5.5.0 -Force -SkipPublisherCheck
+Install-Module PSScriptAnalyzer -Force
+
+# Run the tests (writes testResults.xml + coverage.xml)
+./Tests/PesterConfiguration.ps1
+
+# Run the linter
+Invoke-ScriptAnalyzer -Path . -Recurse -Settings ./PSScriptAnalyzerSettings.psd1
+```
+
+Tests exercise individual functions by dot-sourcing only the Windows-independent
+modules; the GUI (`WpfGui.ps1`), parallel runspaces (`Parallel.ps1`), and engine
+invocation (`Extraction.ps1`) are out of scope for this suite.
 
 ## License
 
