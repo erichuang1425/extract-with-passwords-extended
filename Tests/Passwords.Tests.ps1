@@ -1,8 +1,11 @@
 # Passwords.Tests.ps1 — unit tests for Modules/Passwords.ps1
 #
 # These functions read script-scoped configuration ($UsePasswordCache,
-# $CacheFile, $PwFile, ...) and call Write-Log, so we load Config + Logging,
-# point the file paths at TestDrive, and mock Write-Log.
+# $CacheFile, $PwFile, ...) via dynamic scope and call Write-Log. Inputs are
+# set through a Set-Cfg helper defined in the same BeforeAll as the dot-sourced
+# functions, so the variables land in a scope those functions can see (setting
+# them with '-Scope Script' from inside an It does not reach them under
+# Pester 5). File paths point at TestDrive and Write-Log is mocked.
 
 BeforeAll {
     . (Join-Path $PSScriptRoot 'TestHelpers.ps1')
@@ -10,6 +13,8 @@ BeforeAll {
     . $ProductionModule['Logging']
     . $ProductionModule['Passwords']
     Mock Write-Log {}
+
+    function Set-Cfg { param([string]$Name, $Value) Set-Variable -Name $Name -Value $Value -Scope Script }
 }
 
 Describe 'Get-FileEncoding' {
@@ -36,9 +41,9 @@ Describe 'Get-FileEncoding' {
 
 Describe 'Save-PasswordToCache / Get-CachedPasswords round-trip' {
     BeforeEach {
-        Set-Variable -Name CacheFile -Value (Join-Path $TestDrive 'password-cache.txt') -Scope Script
-        Set-Variable -Name UsePasswordCache -Value $true -Scope Script
-        Set-Variable -Name PasswordCacheRetentionDays -Value 90 -Scope Script
+        Set-Cfg CacheFile (Join-Path $TestDrive 'password-cache.txt')
+        Set-Cfg UsePasswordCache $true
+        Set-Cfg PasswordCacheRetentionDays 90
         if (Test-Path -LiteralPath $CacheFile) { Remove-Item -LiteralPath $CacheFile -Force }
     }
 
@@ -63,7 +68,7 @@ Describe 'Save-PasswordToCache / Get-CachedPasswords round-trip' {
     }
 
     It 'returns nothing when caching is disabled' {
-        Set-Variable -Name UsePasswordCache -Value $false -Scope Script
+        Set-Cfg UsePasswordCache $false
         Save-PasswordToCache -Password 'ignored'
         Get-CachedPasswords | Should -BeNullOrEmpty
     }
@@ -71,16 +76,16 @@ Describe 'Save-PasswordToCache / Get-CachedPasswords round-trip' {
 
 Describe 'Get-Passwords' {
     BeforeEach {
-        Set-Variable -Name CacheFile -Value (Join-Path $TestDrive 'cache.txt') -Scope Script
-        Set-Variable -Name PwDir -Value $TestDrive -Scope Script
-        Set-Variable -Name PwFile -Value (Join-Path $TestDrive 'passwords.txt') -Scope Script
-        Set-Variable -Name UsePasswordCache -Value $false -Scope Script
-        Set-Variable -Name LoadAllPasswordFiles -Value $false -Scope Script
-        Set-Variable -Name PasswordCacheRetentionDays -Value 90 -Scope Script
+        Set-Cfg CacheFile (Join-Path $TestDrive 'cache.txt')
+        Set-Cfg PwDir $TestDrive
+        Set-Cfg PwFile (Join-Path $TestDrive 'passwords.txt')
+        Set-Cfg UsePasswordCache $false
+        Set-Cfg LoadAllPasswordFiles $false
+        Set-Cfg PasswordCacheRetentionDays 90
     }
 
     It 'loads passwords, skipping blanks and comments, and de-duplicates' {
-        Set-Variable -Name TryNoPasswordFirst -Value $false -Scope Script
+        Set-Cfg TryNoPasswordFirst $false
         Set-Content -LiteralPath $PwFile -Encoding UTF8 -Value @(
             'alpha', '# a comment', '', 'beta', 'alpha', '  gamma  '
         )
@@ -89,7 +94,7 @@ Describe 'Get-Passwords' {
     }
 
     It 'prepends the empty-password slot when TryNoPasswordFirst is enabled' {
-        Set-Variable -Name TryNoPasswordFirst -Value $true -Scope Script
+        Set-Cfg TryNoPasswordFirst $true
         Set-Content -LiteralPath $PwFile -Encoding UTF8 -Value @('only')
         $result = @(Get-Passwords)
         $result[0] | Should -Be ''
