@@ -1,6 +1,7 @@
 # Extract with Passwords Extended
 
 [![CI](https://github.com/erichuang1425/extract-with-passwords-extended/actions/workflows/ci.yml/badge.svg)](https://github.com/erichuang1425/extract-with-passwords-extended/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/erichuang1425/extract-with-passwords-extended?sort=semver)](https://github.com/erichuang1425/extract-with-passwords-extended/releases/latest)
 
 Windows context-menu tool for extracting encrypted archives using a password list. Supports multiple extraction engines with automatic fallback.
 
@@ -13,6 +14,7 @@ Windows context-menu tool for extracting encrypted archives using a password lis
 - **Format-aware password testing** — non-encryption formats (tar, gz, cab, iso, etc.) skip password cycling entirely
 - **Header-based encryption detection** — inspects archive headers to skip password cycling on unencrypted archives
 - **Test-only-then-extract** — finds the correct password via lightweight test commands, then extracts once
+- **Recursive nested-archive extraction** — optionally extracts archives found inside extracted output (e.g. a `.zip` containing `.rar` files), bounded by a configurable depth and reusing the parent's password
 - **Error classification** — distinguishes wrong password vs corrupt archive vs timeout vs missing volume
 
 ### GUI
@@ -33,7 +35,7 @@ Windows context-menu tool for extracting encrypted archives using a password lis
 - **Verbose mode** — `verboseEngineLogging` config option restores full engine output when needed
 
 ### Other
-- **Modular architecture** — 8 separate module files for maintainability
+- **Modular architecture** — separate module files for maintainability
 - **Split/multi-volume archive support** — `.001`, `.part01.rar`, and other split formats with volume validation
 - **External JSON configuration** — settings stored in `config.json` that survive reinstalls
 - **Masked password display** — found passwords are masked in console output by default
@@ -51,11 +53,11 @@ Windows context-menu tool for extracting encrypted archives using a password lis
 
 ## Installation
 
-1. Download and extract the release ZIP (or clone this repository)
+1. Download and extract the latest release ZIP from the [Releases page](https://github.com/erichuang1425/extract-with-passwords-extended/releases/latest) (or clone this repository)
 2. Right-click `Install-ArchivePwExtract.ps1` and select **Run with PowerShell**
    - Or run from a PowerShell prompt: `powershell -ExecutionPolicy Bypass -File Install-ArchivePwExtract.ps1`
 3. The installer will:
-   - Copy the orchestrator and 8 module files to `%LOCALAPPDATA%\ArchivePwExtract\`
+   - Copy the orchestrator and module files to `%LOCALAPPDATA%\ArchivePwExtract\`
    - Copy the WPF GUI resources
    - Create a default `config.json` (if one doesn't exist)
    - Register Windows Explorer context menu entries for all supported archive types
@@ -76,11 +78,15 @@ Modules/
   ArchiveUtils.ps1              # Archive detection, validation, output management
   Extraction.ps1                # Engine detection, test/extract, error classification
   Passwords.ps1                 # Password loading, caching, deduplication
+  NestedExtraction.ps1          # Recursive nested-archive extraction post-pass
   Parallel.ps1                  # Runspace pool management for concurrency
   WpfGui.ps1                    # WPF GUI window management
 Resources/
   MainWindow.xaml               # WPF window layout definition
+CHANGELOG.md                    # Release history (Keep a Changelog format)
 ```
+
+See [CHANGELOG.md](CHANGELOG.md) for the release history.
 
 ## Usage
 
@@ -167,6 +173,9 @@ Settings are stored in `%LOCALAPPDATA%\ArchivePwExtract\config.json` and survive
 | `maxParallelPasswords` | `1` | Number of passwords to test concurrently per archive |
 | `maxArchivesPerScan` | `0` | Cap on archives detected per folder scan (0 = unbounded). Stops recursive enumeration early on huge directories. |
 | `preferGui` | `false` | Launch WPF GUI instead of console mode (requires PS 5.1+) |
+| `extractNestedArchives` | `false` | After extraction, scan output folders and extract archives found inside them |
+| `maxNestedDepth` | `1` | How many levels of nesting to recurse into (0 disables; clamped to 1–10) |
+| `deleteNestedArchiveAfterExtract` | `false` | Delete a nested archive file after it is successfully extracted |
 
 ## Supported Formats
 
@@ -235,6 +244,7 @@ Set `maxParallelArchives` > 1 to process multiple archives concurrently using Po
 - **Password file is plaintext**: The `passwords.txt` file is stored unencrypted in your Documents folder.
 - **Clipboard exposure**: Even with auto-clear, the matched password is briefly in the clipboard between discovery and script exit.
 - **No archive creation**: This tool is extraction-only.
+- **Nested extraction is bounded and single-threaded**: When `extractNestedArchives` is enabled, the nested post-pass runs sequentially (regardless of `maxParallelArchives`), is capped by `maxNestedDepth`, and reuses the parent run's password list and cache. A visited-path guard prevents runaway recursion.
 - **Toast notifications**: Require PowerShell 5.0+ and Windows 10+. Silently skipped if unavailable.
 
 ## Troubleshooting

@@ -9,6 +9,9 @@ BeforeAll {
     # Config.ps1 defines $EncryptionCapableExtensions used by Test-IsEncryptionCapable.
     . $ProductionModule['Config']
     . $ProductionModule['ArchiveUtils']
+    # Find-NestedArchives only calls Write-Log from its enumeration catch blocks;
+    # stub it so the helper is self-contained without the Logging module.
+    function Write-Log { param($Message, $Level) }
 }
 
 Describe 'Get-ArchiveBaseName' {
@@ -69,6 +72,39 @@ Describe 'Test-IsRarLike' {
 
     It 'does not match a zip' {
         Test-IsRarLike 'a.zip' | Should -BeFalse
+    }
+}
+
+Describe 'Find-NestedArchives' {
+    BeforeAll {
+        $script:nestRoot = Join-Path $TestDrive 'nest'
+        $sub = Join-Path $script:nestRoot 'sub'
+        New-Item -ItemType Directory -Force -Path $sub | Out-Null
+
+        # Entry archives that should be discovered
+        New-Item -ItemType File -Force -Path (Join-Path $script:nestRoot 'a.zip')   | Out-Null
+        New-Item -ItemType File -Force -Path (Join-Path $script:nestRoot 'b.rar')   | Out-Null
+        New-Item -ItemType File -Force -Path (Join-Path $sub 'd.7z')                | Out-Null
+        # Excluded: not an archive, and a non-entry split volume
+        New-Item -ItemType File -Force -Path (Join-Path $script:nestRoot 'notes.txt')      | Out-Null
+        New-Item -ItemType File -Force -Path (Join-Path $script:nestRoot 'c.part02.rar')   | Out-Null
+    }
+
+    It 'returns only supported entry archives, recursing into subfolders' {
+        $found = @(Find-NestedArchives -Root $script:nestRoot)
+        $names = @($found | ForEach-Object { [IO.Path]::GetFileName($_) } | Sort-Object)
+        $names | Should -Be @('a.zip', 'b.rar', 'd.7z')
+    }
+
+    It 'excludes non-entry split volumes and non-archive files' {
+        $found = @(Find-NestedArchives -Root $script:nestRoot)
+        $names = @($found | ForEach-Object { [IO.Path]::GetFileName($_) })
+        $names | Should -Not -Contain 'c.part02.rar'
+        $names | Should -Not -Contain 'notes.txt'
+    }
+
+    It 'returns an empty result for a non-existent root' {
+        @(Find-NestedArchives -Root (Join-Path $TestDrive 'does-not-exist')).Count | Should -Be 0
     }
 }
 
