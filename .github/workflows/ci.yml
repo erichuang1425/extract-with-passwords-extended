@@ -6,8 +6,8 @@ on:
   pull_request:
 
 jobs:
-  quality:
-    name: Lint & Test
+  lint:
+    name: Lint (PSScriptAnalyzer)
     runs-on: windows-latest
     defaults:
       run:
@@ -16,23 +16,41 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install PowerShell modules
+      - name: Install PSScriptAnalyzer
         run: |
           Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
-          Install-Module Pester -MinimumVersion 5.5.0 -Force -SkipPublisherCheck -Scope CurrentUser
-          Install-Module PSScriptAnalyzer -Force -Scope CurrentUser
+          if (-not (Get-Module -ListAvailable PSScriptAnalyzer)) {
+            Install-Module PSScriptAnalyzer -Force -Scope CurrentUser
+          }
 
-      - name: PSScriptAnalyzer
+      - name: Run PSScriptAnalyzer
         run: |
           $results = Invoke-ScriptAnalyzer -Path . -Recurse -Settings ./PSScriptAnalyzerSettings.psd1
           if ($results) { $results | Format-Table -AutoSize | Out-String | Write-Host }
           $errors = @($results | Where-Object { $_.Severity -eq 'Error' })
-          Write-Host "Analyzer findings: $($results.Count) total, $($errors.Count) error(s)."
+          Write-Host "Analyzer findings: $(@($results).Count) total, $($errors.Count) error(s)."
           if ($errors.Count -gt 0) {
             throw "PSScriptAnalyzer reported $($errors.Count) error-severity finding(s)."
           }
 
-      - name: Pester tests
+  test:
+    name: Test (Pester)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Pester
+        run: |
+          Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+          if (-not (Get-Module -ListAvailable Pester | Where-Object { $_.Version -ge [version]'5.0.0' })) {
+            Install-Module Pester -MinimumVersion 5.5.0 -Force -SkipPublisherCheck -Scope CurrentUser
+          }
+
+      - name: Run Pester tests
         run: ./Tests/PesterConfiguration.ps1
 
       - name: Upload test artifacts
