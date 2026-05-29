@@ -269,6 +269,9 @@ function Resolve-OutputDir {
             if (Test-Path -LiteralPath $BaseDir) {
                 Write-Log "Replacing existing output folder: $BaseDir" "WARN"
                 Remove-Item -LiteralPath $BaseDir -Recurse -Force -ErrorAction SilentlyContinue
+                if (Test-Path -LiteralPath $BaseDir) {
+                    Write-Log "Existing output folder could not be fully cleared; stale files may remain: $BaseDir" "WARN"
+                }
             }
 
             New-Item -ItemType Directory -Force -Path $BaseDir | Out-Null

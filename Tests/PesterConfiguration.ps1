@@ -32,7 +32,8 @@ $config.CodeCoverage.Path         = @(
     (Join-Path $modulesDir 'Logging.ps1'),
     (Join-Path $modulesDir 'ConsoleUI.ps1'),
     (Join-Path $modulesDir 'ArchiveUtils.ps1'),
-    (Join-Path $modulesDir 'Passwords.ps1')
+    (Join-Path $modulesDir 'Passwords.ps1'),
+    (Join-Path $modulesDir 'Extraction.ps1')
 )
 $config.CodeCoverage.OutputPath   = $CoveragePath
 

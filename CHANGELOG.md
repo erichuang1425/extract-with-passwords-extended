@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.1.1] - 2026-05-29
+
+### Fixed
+- **Parallel archive mode now caches found passwords.** The cache file path was
+  never passed into the worker runspaces, so every cache write silently failed.
+  `password-cache.txt` is now populated in parallel mode just like sequential.
+- **Concurrency-safe password cache.** Cache read/modify/write is now serialized
+  with a named, per-cache-file mutex (with graceful fallback), preventing
+  duplicate entries or a clobbered file when multiple archives finish at once.
+- **Parallel password-test logging no longer corrupts the run log.** Each
+  password-test worker now writes to its own per-thread log that is merged at the
+  end (matching the parallel-archive path) instead of all workers appending to
+  the shared main log concurrently. `Write-Log` is also hardened to retry briefly
+  and never throw, so a transient file lock can't abort a run.
+- **Accurate failure reporting.** The previously-unused error classifier is now
+  wired through every failure path, so timeouts, corrupt archives, missing
+  volumes, permission errors, and engine faults are reported distinctly in the
+  summary instead of all being labelled "Wrong password".
+- A corrupt password-cache line with an unparseable timestamp now contributes
+  only its password portion as a candidate, not the raw `timestamp|password` text.
+- `Resolve-OutputDir` "replace" now warns when an existing output folder cannot
+  be fully cleared, instead of silently mixing stale files into new output.
+
+### Changed
+- Parallel archive mode now reports found passwords and copies one to the
+  clipboard (honoring `showPasswordInConsole`), matching sequential-mode behavior.
+
 ## [4.1.0] - 2026-05-29
 
 ### Added

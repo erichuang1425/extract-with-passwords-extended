@@ -32,11 +32,63 @@ function Get-FileEncoding {
     return [Text.Encoding]::UTF8
 }
 
+function Get-CacheMutexName {
+    # Stable, per-cache-file mutex name. Hash the full path so distinct cache
+    # files don't share a lock and the name carries no invalid characters.
+    # "Local\" scopes the lock to the current logon session.
+    $key = if ($CacheFile) { ([string]$CacheFile).ToLowerInvariant() } else { "default" }
+    $md5 = [System.Security.Cryptography.MD5]::Create()
+    try {
+        $bytes = $md5.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($key))
+    } finally {
+        $md5.Dispose()
+    }
+    $hash = ([System.BitConverter]::ToString($bytes)).Replace("-", "")
+    return "Local\TryPwExtract_PwCache_$hash"
+}
+
+function Enter-CacheLock {
+    # Acquire the named cache mutex (serializes cache read/modify/write across
+    # runspaces in the same process). Never throws. If the mutex cannot be
+    # created or acquired within the timeout, returns an unacquired lock so the
+    # caller proceeds unguarded (graceful degradation) instead of blocking.
+    $mutex = $null
+    try {
+        $mutex = New-Object System.Threading.Mutex($false, (Get-CacheMutexName))
+    } catch {
+        return [PSCustomObject]@{ Mutex = $null; Acquired = $false }
+    }
+
+    $acquired = $false
+    try {
+        $acquired = $mutex.WaitOne(5000)
+    } catch [System.Threading.AbandonedMutexException] {
+        # A previous owner died holding the mutex; we now own it.
+        $acquired = $true
+    } catch {
+        $acquired = $false
+    }
+
+    return [PSCustomObject]@{ Mutex = $mutex; Acquired = $acquired }
+}
+
+function Exit-CacheLock {
+    param($Lock)
+
+    if ($Lock -and $Lock.Mutex) {
+        if ($Lock.Acquired) {
+            try { $Lock.Mutex.ReleaseMutex() } catch {}
+        }
+        try { $Lock.Mutex.Dispose() } catch {}
+    }
+}
+
 function Get-CachedPasswords {
     if (-not $UsePasswordCache) { return @() }
     if (!(Test-Path -LiteralPath $CacheFile)) { return @() }
 
     $list = @()
+    $lock = Enter-CacheLock
     try {
         $raw = Get-Content -LiteralPath $CacheFile -Encoding UTF8 -ErrorAction SilentlyContinue
         $cutoff = (Get-Date).AddDays(-$PasswordCacheRetentionDays)
@@ -57,7 +109,9 @@ function Get-CachedPasswords {
                         $kept += $line
                     }
                 } catch {
-                    $list += $line
+                    # Malformed timestamp: keep the line on disk, but only surface
+                    # the password portion as a candidate (not the raw "ts|pw").
+                    $list += $parts[1]
                     $kept += $line
                 }
             } else {
@@ -71,6 +125,8 @@ function Get-CachedPasswords {
         }
     } catch {
         Write-Log "Could not read password cache: $($_.Exception.Message)" "WARN"
+    } finally {
+        Exit-CacheLock $lock
     }
 
     return @($list)
@@ -81,6 +137,8 @@ function Save-PasswordToCache {
 
     if (-not $UsePasswordCache) { return }
 
+    $lock = Enter-CacheLock
+    $saved = $false
     try {
         if (!(Test-Path -LiteralPath $CacheFile)) {
             New-Item -ItemType File -Force -Path $CacheFile | Out-Null
@@ -88,19 +146,28 @@ function Save-PasswordToCache {
 
         $existing = Get-Content -LiteralPath $CacheFile -Encoding UTF8 -ErrorAction SilentlyContinue
 
+        $alreadyPresent = $false
         foreach ($line in $existing) {
             if ($line -and -not $line.StartsWith("#")) {
                 $parts = $line.Split("|", 2)
                 $pw = if ($parts.Count -eq 2) { $parts[1] } else { $line }
-                if ($pw -eq $Password) { return }
+                if ($pw -eq $Password) { $alreadyPresent = $true; break }
             }
         }
 
-        $entry = "{0}|{1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $Password
-        Add-Content -LiteralPath $CacheFile -Value $entry -Encoding UTF8
-        Write-Log "Password saved to cache."
+        if (-not $alreadyPresent) {
+            $entry = "{0}|{1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $Password
+            Add-Content -LiteralPath $CacheFile -Value $entry -Encoding UTF8
+            $saved = $true
+        }
     } catch {
         Write-Log "Could not save password to cache: $($_.Exception.Message)" "WARN"
+    } finally {
+        Exit-CacheLock $lock
+    }
+
+    if ($saved) {
+        Write-Log "Password saved to cache."
     }
 }
 

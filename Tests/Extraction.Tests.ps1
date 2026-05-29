@@ -1,0 +1,73 @@
+# Extraction.Tests.ps1 — unit tests for the error classifier in Modules/Extraction.ps1
+#
+# Only the pure-logic classification functions are exercised here
+# (Get-ExtractionErrorType / Get-LastEngineFailureType). The engine
+# detection/invocation functions require a real 7-Zip/WinRAR and are not tested.
+
+BeforeAll {
+    . (Join-Path $PSScriptRoot 'TestHelpers.ps1')
+    . $ProductionModule['Extraction']
+}
+
+Describe 'Get-ExtractionErrorType' {
+    It 'classifies a timeout exit code' {
+        (Get-ExtractionErrorType -ExitCode -998 -Output @()).Type | Should -Be 'Timeout'
+    }
+
+    It 'classifies success' {
+        (Get-ExtractionErrorType -ExitCode 0 -Output @()).Type | Should -Be 'Success'
+    }
+
+    It 'classifies a missing engine from process-error output' {
+        (Get-ExtractionErrorType -ExitCode -999 -Output @('The system cannot find the file specified')).Type | Should -Be 'MissingEngine'
+    }
+
+    It 'classifies a generic process error' {
+        (Get-ExtractionErrorType -ExitCode -999 -Output @('boom')).Type | Should -Be 'ProcessError'
+    }
+
+    It 'classifies a wrong password' {
+        (Get-ExtractionErrorType -ExitCode 2 -Output @('ERROR: Wrong password')).Type | Should -Be 'WrongPassword'
+    }
+
+    It 'classifies a missing volume' {
+        (Get-ExtractionErrorType -ExitCode 2 -Output @('Cannot find volume')).Type | Should -Be 'MissingVolume'
+    }
+
+    It 'classifies a permission error' {
+        (Get-ExtractionErrorType -ExitCode 2 -Output @('Access is denied')).Type | Should -Be 'PermissionDenied'
+    }
+
+    It 'classifies a corrupt archive' {
+        (Get-ExtractionErrorType -ExitCode 2 -Output @('Unexpected end of archive')).Type | Should -Be 'CorruptArchive'
+    }
+
+    It 'treats CRC failure on a known-encrypted archive as a wrong password' {
+        (Get-ExtractionErrorType -ExitCode 2 -Output @('CRC Failed') -ArchiveKnownEncrypted $true).Type | Should -Be 'WrongPassword'
+    }
+
+    It 'treats CRC failure on an unencrypted archive as corruption' {
+        (Get-ExtractionErrorType -ExitCode 2 -Output @('CRC Failed') -ArchiveKnownEncrypted $false).Type | Should -Be 'CorruptArchive'
+    }
+
+    It 'falls back to Unknown for unrecognized output' {
+        (Get-ExtractionErrorType -ExitCode 7 -Output @('something weird')).Type | Should -Be 'Unknown'
+    }
+}
+
+Describe 'Get-LastEngineFailureType' {
+    It 'returns nothing when no engine result has been recorded' {
+        $script:LastEngineResult = $null
+        Get-LastEngineFailureType | Should -BeNullOrEmpty
+    }
+
+    It 'classifies from the recorded engine result' {
+        $script:LastEngineResult = @{ ExitCode = -998; Output = @() }
+        Get-LastEngineFailureType | Should -Be 'Timeout'
+    }
+
+    It 'passes the encrypted hint through to the classifier' {
+        $script:LastEngineResult = @{ ExitCode = 2; Output = @('CRC Failed') }
+        Get-LastEngineFailureType -ArchiveKnownEncrypted $true | Should -Be 'WrongPassword'
+    }
+}

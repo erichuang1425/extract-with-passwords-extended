@@ -1,5 +1,11 @@
 # Extraction.ps1 — Engine detection, password argument building, test and extract functions
 
+# Holds the most recent engine process result (ExitCode + Output) so the caller
+# can classify *why* an attempt failed (timeout / corrupt / wrong password / ...)
+# via Get-LastEngineFailureType. Set per-runspace, so parallel workers don't
+# clobber each other.
+$script:LastEngineResult = $null
+
 function Get-NormalSevenZipPath {
     $found = Find-FirstExistingPath @(
         "$env:ProgramFiles\7-Zip\7z.exe",
@@ -142,6 +148,7 @@ function Test-With7z {
     $argumentList += $Archive
 
     $result = Invoke-ProcessLogged -Exe $SevenZip -ArgumentList $argumentList -Operation "7Z TEST" -ShowOutput $false -TimeoutSeconds $Timeout -CondenseOutput $true
+    $script:LastEngineResult = $result
     $code = [int]$result.ExitCode
 
     return ($code -eq 0)
@@ -169,6 +176,7 @@ function Extract-With7z {
     $argumentList += $Archive
 
     $result = Invoke-ProcessLogged -Exe $SevenZip -ArgumentList $argumentList -Operation "7Z EXTRACT" -ShowOutput $false -TimeoutSeconds $Timeout
+    $script:LastEngineResult = $result
     $code = [int]$result.ExitCode
 
     $after = Get-DirectoryItemCount -Dir $OutputDir
@@ -211,6 +219,7 @@ function Test-WithWinRar {
     $argumentList += $Archive
 
     $result = Invoke-ProcessLogged -Exe $RarExe -ArgumentList $argumentList -Operation "WINRAR/UNRAR TEST" -ShowOutput $false -TimeoutSeconds $Timeout -CondenseOutput $true
+    $script:LastEngineResult = $result
     $code = [int]$result.ExitCode
 
     return ($code -eq 0)
@@ -236,6 +245,7 @@ function Extract-WithWinRar {
     $argumentList += $dest
 
     $result = Invoke-ProcessLogged -Exe $RarExe -ArgumentList $argumentList -Operation "WINRAR/UNRAR EXTRACT" -ShowOutput $false -TimeoutSeconds $Timeout
+    $script:LastEngineResult = $result
     $code = [int]$result.ExitCode
 
     $after = Get-DirectoryItemCount -Dir $OutputDir
@@ -398,4 +408,19 @@ function Get-ExtractionErrorType {
     }
 
     return [PSCustomObject]@{ Type = "Unknown"; Confidence = "Low" }
+}
+
+function Get-LastEngineFailureType {
+    param([bool]$ArchiveKnownEncrypted = $false)
+
+    if ($null -eq $script:LastEngineResult) {
+        return $null
+    }
+
+    $cls = Get-ExtractionErrorType `
+        -ExitCode ([int]$script:LastEngineResult.ExitCode) `
+        -Output @($script:LastEngineResult.Output) `
+        -ArchiveKnownEncrypted $ArchiveKnownEncrypted
+
+    return $cls.Type
 }
