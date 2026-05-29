@@ -251,7 +251,8 @@ function Test-MultiVolumeComplete {
 function Resolve-OutputDir {
     param(
         [string]$BaseDir,
-        [bool]$IsSharedOutput
+        [bool]$IsSharedOutput,
+        [string]$BehaviorOverride = ""
     )
 
     if ($IsSharedOutput) {
@@ -259,7 +260,11 @@ function Resolve-OutputDir {
         return $BaseDir
     }
 
-    switch ($ExistingOutputBehavior.ToLowerInvariant()) {
+    # Callers (e.g. nested extraction) may force a specific behavior to avoid
+    # the destructive "replace" default clobbering sibling directories.
+    $behavior = if ([string]::IsNullOrWhiteSpace($BehaviorOverride)) { $ExistingOutputBehavior } else { $BehaviorOverride }
+
+    switch ($behavior.ToLowerInvariant()) {
         "replace" {
             if (Test-Path -LiteralPath $BaseDir) {
                 Write-Log "Replacing existing output folder: $BaseDir" "WARN"
@@ -417,6 +422,46 @@ function Find-ArchivesFromInputs {
         Archives = @($archives.ToArray() | Sort-Object -Unique)
         Skipped = @($skippedArray | Sort-Object -Unique)
     }
+}
+
+function Find-NestedArchives {
+    param([string]$Root)
+
+    $archives = New-Object System.Collections.Generic.List[string]
+
+    if ([string]::IsNullOrWhiteSpace($Root) -or !(Test-Path -LiteralPath $Root)) {
+        return @()
+    }
+
+    $stack = New-Object System.Collections.Generic.Stack[string]
+    $stack.Push($Root)
+
+    while ($stack.Count -gt 0) {
+        $dir = $stack.Pop()
+
+        $childFiles = $null
+        try { $childFiles = [IO.Directory]::EnumerateFiles($dir) } catch {
+            Write-Log "Cannot enumerate nested files in $dir : $($_.Exception.Message)" "WARN"
+        }
+
+        if ($childFiles) {
+            foreach ($filePath in $childFiles) {
+                if ((Test-IsSupportedArchiveName $filePath) -and (Test-IsFirstVolumeOrNormalArchive $filePath)) {
+                    [void]$archives.Add($filePath)
+                }
+            }
+        }
+
+        try {
+            foreach ($sub in [IO.Directory]::EnumerateDirectories($dir)) {
+                $stack.Push($sub)
+            }
+        } catch {
+            Write-Log "Cannot enumerate nested subdirectories in $dir : $($_.Exception.Message)" "WARN"
+        }
+    }
+
+    return @($archives.ToArray() | Sort-Object -Unique)
 }
 
 function Find-OrphanedSplitEntries {

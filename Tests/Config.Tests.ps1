@@ -49,6 +49,44 @@ Describe 'Test-ConfigSane integer clamping' {
             $script:PasswordCacheRetentionDays | Should -Be 45
         }
     }
+
+    It 'clamps a too-large MaxNestedDepth down to the maximum (10)' {
+        InModuleScope CfgUnderTest {
+            $script:MaxNestedDepth = 99
+            Test-ConfigSane
+            $script:MaxNestedDepth | Should -Be 10
+        }
+    }
+
+    It 'allows MaxNestedDepth of 0 (feature effectively disabled)' {
+        InModuleScope CfgUnderTest {
+            $script:MaxNestedDepth = 0
+            Test-ConfigSane
+            $script:MaxNestedDepth | Should -Be 0
+        }
+    }
+
+    It 'resets a non-integer MaxNestedDepth to its default (1)' {
+        InModuleScope CfgUnderTest {
+            $script:MaxNestedDepth = 'deep'
+            Test-ConfigSane
+            $script:MaxNestedDepth | Should -Be 1
+        }
+    }
+}
+
+Describe 'Nested-archive defaults' {
+    It 'defaults ExtractNestedArchives to disabled' {
+        InModuleScope CfgUnderTest {
+            $script:ExtractNestedArchives | Should -BeFalse
+        }
+    }
+
+    It 'defaults DeleteNestedArchiveAfterExtract to disabled' {
+        InModuleScope CfgUnderTest {
+            $script:DeleteNestedArchiveAfterExtract | Should -BeFalse
+        }
+    }
 }
 
 Describe 'Test-ConfigSane enum validation' {

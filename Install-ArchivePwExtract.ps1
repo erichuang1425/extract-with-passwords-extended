@@ -1,5 +1,5 @@
 # Install-ArchivePwExtract.ps1
-# Multi-engine installer for Archive Password-List Extractor v4.0.
+# Multi-engine installer for Archive Password-List Extractor.
 #
 # Features:
 # - Modular architecture with separate .ps1 module files
@@ -19,6 +19,10 @@
 # <Documents>\ArchivePwExtract\passwords.txt
 
 $ErrorActionPreference = "Stop"
+
+# Keep in lockstep with $AppVersion in Modules/Config.ps1. The installer does not
+# dot-source Config.ps1 at runtime, so it carries its own copy of the version.
+$AppVersion = "4.1.0"
 
 if ($PSVersionTable.PSVersion.Major -lt 3) {
     Write-Host "PowerShell 3.0 or later is required. Current: $($PSVersionTable.PSVersion)" -ForegroundColor Red
@@ -97,7 +101,10 @@ if (!(Test-Path -LiteralPath $ConfigPath)) {
     "maxParallelArchives": 1,
     "maxParallelPasswords": 1,
     "maxArchivesPerScan": 0,
-    "preferGui": false
+    "preferGui": false,
+    "extractNestedArchives": false,
+    "maxNestedDepth": 1,
+    "deleteNestedArchiveAfterExtract": false
 }
 "@ | Set-Content -LiteralPath $ConfigPath -Encoding UTF8
 }
@@ -117,6 +124,7 @@ $moduleFiles = @(
     "ArchiveUtils.ps1",
     "Extraction.ps1",
     "Passwords.ps1",
+    "NestedExtraction.ps1",
     "Parallel.ps1",
     "WpfGui.ps1"
 )
@@ -452,8 +460,9 @@ Write-Host "    Passwords:  " -NoNewline; Write-Host $PwFile -ForegroundColor Wh
 Write-Host "    Config:     " -NoNewline; Write-Host $ConfigPath -ForegroundColor White
 Write-Host "    Logs:       " -NoNewline; Write-Host $LogDir -ForegroundColor White
 Write-Host ""
-Write-Host "  New in v4.0:" -ForegroundColor Cyan
-Write-Host "    - Modular architecture (8 separate module files)"
+Write-Host "  New in v$($AppVersion):" -ForegroundColor Cyan
+Write-Host "    - Recursive nested-archive extraction (set extractNestedArchives: true)"
+Write-Host "    - Modular architecture with separate module files"
 Write-Host "    - WPF GUI mode (set preferGui: true in config.json)"
 Write-Host "    - Parallel archive and password processing"
 Write-Host "    - Condensed logging (no more per-file wrong-password spam)"
