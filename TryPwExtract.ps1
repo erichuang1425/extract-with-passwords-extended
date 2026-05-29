@@ -427,6 +427,34 @@ try {
             }
         }
 
+        # Parity with sequential mode: surface the winning password(s), copy one
+        # to the clipboard, and seed the nested-pass reorder. (Result order from
+        # the parallel bag is not deterministic, so "a" found password is copied.)
+        $parallelWins = @($parallelResults | Where-Object { $_.Status -eq "Succeeded" -and $_.Password })
+        if ($parallelWins.Count -gt 0) {
+            Write-Both "" "INFO"
+            Write-Status "Passwords found:" "info"
+            foreach ($w in $parallelWins) {
+                $shown = if ($ShowPasswordInConsole) { $w.Password } else { Format-MaskedPassword $w.Password }
+                Write-Host "    " -NoNewline
+                Write-Host ([IO.Path]::GetFileName($w.Archive)) -ForegroundColor White -NoNewline
+                Write-Host "  ->  " -ForegroundColor DarkGray -NoNewline
+                Write-Host $shown -ForegroundColor White
+            }
+
+            $lastSuccessfulPassword = $parallelWins[-1].Password
+
+            if ($PSVersionTable.PSVersion.Major -ge 5) {
+                try {
+                    $lastSuccessfulPassword | Set-Clipboard
+                    $lastCopiedPassword = $lastSuccessfulPassword
+                    Write-Status "Found password copied to clipboard" "dim"
+                } catch {
+                    Write-Log "Could not copy password to clipboard: $($_.Exception.Message)" "WARN"
+                }
+            }
+        }
+
         # Fall through to summary
     } else {
 
@@ -582,8 +610,10 @@ try {
                 Write-Status "See log: $RunLogPath" "dim"
                 Write-Log "FAILED: $Archive" "ERROR"
                 $Failed += $Archive
-                if (-not $FailureReasons.ContainsKey("ExtractionFailed")) { $FailureReasons["ExtractionFailed"] = 0 }
-                $FailureReasons["ExtractionFailed"]++
+                $seqReason = Get-LastEngineFailureType
+                if ([string]::IsNullOrEmpty($seqReason) -or $seqReason -in @("Success", "Unknown", "WrongPassword")) { $seqReason = "ExtractionFailed" }
+                if (-not $FailureReasons.ContainsKey($seqReason)) { $FailureReasons[$seqReason] = 0 }
+                $FailureReasons[$seqReason]++
                 Remove-EmptyOutputDir -OutputDir $outputDir -SeparateFolders $SeparateFolders
             }
 
@@ -919,8 +949,10 @@ try {
             Write-Status "See log: $RunLogPath" "dim"
             Write-Log "FAILED: $Archive" "ERROR"
             $Failed += $Archive
-            if (-not $FailureReasons.ContainsKey("WrongPassword")) { $FailureReasons["WrongPassword"] = 0 }
-            $FailureReasons["WrongPassword"]++
+            $seqReason = Get-LastEngineFailureType -ArchiveKnownEncrypted ($actuallyEncrypted -eq $true)
+            if ([string]::IsNullOrEmpty($seqReason) -or $seqReason -in @("Success", "Unknown")) { $seqReason = "WrongPassword" }
+            if (-not $FailureReasons.ContainsKey($seqReason)) { $FailureReasons[$seqReason] = 0 }
+            $FailureReasons[$seqReason]++
             Remove-EmptyOutputDir -OutputDir $outputDir -SeparateFolders $SeparateFolders
         }
 
@@ -1129,10 +1161,15 @@ try {
             "WrongPassword"    = "Wrong password"
             "Inaccessible"     = "Inaccessible / locked"
             "NoEngine"         = "No compatible engine"
+            "MissingEngine"    = "Engine not runnable"
             "ExtractionFailed" = "Corrupt or unsupported"
+            "CorruptArchive"   = "Corrupt or unsupported"
             "WorkerException"  = "Worker exception"
             "MissingVolume"    = "Missing volume"
+            "PermissionDenied" = "Permission denied"
+            "ProcessError"     = "Engine process error"
             "Timeout"          = "Timeout"
+            "Unknown"          = "Unknown"
         }
         foreach ($reason in ($FailureReasons.Keys | Sort-Object)) {
             $label = if ($labelMap.ContainsKey($reason)) { $labelMap[$reason] } else { $reason }

@@ -18,11 +18,14 @@ $RepoRoot   = Split-Path -Parent $PSScriptRoot
 $ModulesDir = Join-Path $RepoRoot 'Modules'
 
 # Only the modules with no hard Windows/WPF/engine dependencies are listed
-# here. WpfGui.ps1, Parallel.ps1 and Extraction.ps1 are intentionally omitted.
+# here. WpfGui.ps1 and Parallel.ps1 are intentionally omitted. Extraction.ps1 is
+# included only for its pure-logic error classifier (Get-ExtractionErrorType /
+# Get-LastEngineFailureType); its engine-invocation functions are not tested.
 $ProductionModule = @{
     Config       = Join-Path $ModulesDir 'Config.ps1'
     Logging      = Join-Path $ModulesDir 'Logging.ps1'
     ConsoleUI    = Join-Path $ModulesDir 'ConsoleUI.ps1'
     ArchiveUtils = Join-Path $ModulesDir 'ArchiveUtils.ps1'
     Passwords    = Join-Path $ModulesDir 'Passwords.ps1'
+    Extraction   = Join-Path $ModulesDir 'Extraction.ps1'
 }

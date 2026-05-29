@@ -52,3 +52,36 @@ Describe 'ConvertTo-WindowsCommandLineArg' {
         ConvertTo-WindowsCommandLineArg 'a"b' | Should -Be '"a\"b"'
     }
 }
+
+Describe 'Write-Log resilience' {
+    It 'writes a formatted line to the log file (happy path)' {
+        $script:RunLogPath = Join-Path $TestDrive ("wl_{0}.log" -f ([guid]::NewGuid()))
+        Write-Log -Message 'hello world' -Level 'INFO'
+        (Get-Content -LiteralPath $script:RunLogPath -Raw) | Should -Match '\[INFO\] hello world'
+    }
+
+    It 'does not throw when the target path is unwritable' {
+        # Parent directory does not exist, so Add-Content fails on every attempt;
+        # the logger must retry and then give up silently rather than throw.
+        $script:RunLogPath = Join-Path $TestDrive 'no-such-dir\sub\x.log'
+        { Write-Log -Message 'x' } | Should -Not -Throw
+    }
+}
+
+Describe 'Merge-WorkerLogs' {
+    It 'appends worker logs into the main log and removes the worker files' {
+        $main = Join-Path $TestDrive 'run.log'
+        Set-Content -LiteralPath $main -Value '[main] start' -Encoding UTF8
+        Set-Content -LiteralPath (Join-Path $TestDrive 'run_worker_111.log') -Value 'w1 line' -Encoding UTF8
+        Set-Content -LiteralPath (Join-Path $TestDrive 'run_worker_222.log') -Value 'w2 line' -Encoding UTF8
+
+        Merge-WorkerLogs -MainLogPath $main
+
+        $body = Get-Content -LiteralPath $main -Raw
+        $body | Should -Match 'merged from worker thread 111'
+        $body | Should -Match 'w1 line'
+        $body | Should -Match 'w2 line'
+        (Test-Path -LiteralPath (Join-Path $TestDrive 'run_worker_111.log')) | Should -BeFalse
+        (Test-Path -LiteralPath (Join-Path $TestDrive 'run_worker_222.log')) | Should -BeFalse
+    }
+}

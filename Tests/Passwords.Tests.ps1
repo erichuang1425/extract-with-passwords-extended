@@ -168,3 +168,93 @@ Describe 'Get-Passwords' {
         }
     }
 }
+
+Describe 'Password cache concurrency safety' {
+    It 'does not throw when CacheFile is unset (parallel-worker regression)' {
+        InModuleScope PwUnderTest {
+            Mock Write-Log {}
+            $script:UsePasswordCache = $true
+            $script:CacheFile = $null
+            { Save-PasswordToCache -Password 'x' } | Should -Not -Throw
+        }
+    }
+
+    It 'saves and reads back through the mutex (happy path unchanged)' {
+        InModuleScope PwUnderTest {
+            $dir = Join-Path ([IO.Path]::GetTempPath()) ([guid]::NewGuid())
+            New-Item -ItemType Directory -Path $dir | Out-Null
+            try {
+                Mock Write-Log {}
+                $script:UsePasswordCache = $true
+                $script:CacheFile = Join-Path $dir 'cache.txt'
+                $script:PasswordCacheRetentionDays = 90
+                Save-PasswordToCache -Password 'mutexpw'
+                Get-CachedPasswords | Should -Contain 'mutexpw'
+            } finally {
+                Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        }
+    }
+
+    It 'repeated saves of the same password produce exactly one data line' {
+        InModuleScope PwUnderTest {
+            $dir = Join-Path ([IO.Path]::GetTempPath()) ([guid]::NewGuid())
+            New-Item -ItemType Directory -Path $dir | Out-Null
+            try {
+                Mock Write-Log {}
+                $script:UsePasswordCache = $true
+                $script:CacheFile = Join-Path $dir 'cache.txt'
+                $script:PasswordCacheRetentionDays = 90
+                1..5 | ForEach-Object { Save-PasswordToCache -Password 'same' }
+                (@(Get-CachedPasswords) | Where-Object { $_ -eq 'same' }).Count | Should -Be 1
+                (@(Get-Content -LiteralPath $script:CacheFile) | Where-Object { $_ -match '\|same$' }).Count | Should -Be 1
+            } finally {
+                Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        }
+    }
+
+    It 'Get-CacheMutexName is stable and free of invalid characters' {
+        InModuleScope PwUnderTest {
+            $script:CacheFile = 'C:\some\password-cache.txt'
+            $n1 = Get-CacheMutexName
+            $n2 = Get-CacheMutexName
+            $n1 | Should -Be $n2
+            $n1 | Should -Match '^Local\\TryPwExtract_PwCache_[a-z0-9_]+$'
+        }
+    }
+
+    It 'Enter-CacheLock acquires and Exit-CacheLock releases (re-acquirable)' {
+        InModuleScope PwUnderTest {
+            $script:CacheFile = Join-Path ([IO.Path]::GetTempPath()) 'lock-probe.txt'
+            $lock1 = Enter-CacheLock
+            $lock1.Acquired | Should -BeTrue
+            Exit-CacheLock $lock1
+            # A second acquire only succeeds promptly if the first was released.
+            $lock2 = Enter-CacheLock
+            $lock2.Acquired | Should -BeTrue
+            Exit-CacheLock $lock2
+        }
+    }
+}
+
+Describe 'Get-CachedPasswords malformed-line handling' {
+    It 'surfaces only the password portion when the timestamp is unparseable' {
+        InModuleScope PwUnderTest {
+            $dir = Join-Path ([IO.Path]::GetTempPath()) ([guid]::NewGuid())
+            New-Item -ItemType Directory -Path $dir | Out-Null
+            try {
+                Mock Write-Log {}
+                $script:UsePasswordCache = $true
+                $script:CacheFile = Join-Path $dir 'cache.txt'
+                $script:PasswordCacheRetentionDays = 90
+                Set-Content -LiteralPath $script:CacheFile -Value @('notadate|secret') -Encoding UTF8
+                $result = @(Get-CachedPasswords)
+                $result | Should -Contain 'secret'
+                $result | Should -Not -Contain 'notadate|secret'
+            } finally {
+                Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        }
+    }
+}

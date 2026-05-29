@@ -7,7 +7,21 @@ function Write-Log {
     )
 
     $line = "[{0}] [{1}] {2}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss.fff"), $Level, $Message
-    Add-Content -LiteralPath $RunLogPath -Value $line -Encoding UTF8
+
+    # The logger must never throw: a transient share violation (concurrent
+    # writer, AV scanner, log open in an editor) should be retried briefly and
+    # then dropped silently rather than aborting an extraction run.
+    $attempts = 0
+    while ($true) {
+        try {
+            Add-Content -LiteralPath $RunLogPath -Value $line -Encoding UTF8
+            break
+        } catch {
+            $attempts++
+            if ($attempts -ge 3) { break }
+            Start-Sleep -Milliseconds 25
+        }
+    }
 }
 
 function Merge-WorkerLogs {
