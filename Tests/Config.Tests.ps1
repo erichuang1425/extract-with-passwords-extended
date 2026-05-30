@@ -121,4 +121,42 @@ Describe 'Test-ConfigSane enum validation' {
             $script:WinRarOverwriteMode | Should -Be '-o+'
         }
     }
+
+    It 'resets an invalid PostExtractionAction to prompt' {
+        InModuleScope CfgUnderTest {
+            $script:PostExtractionAction = 'shred'
+            Test-ConfigSane
+            $script:PostExtractionAction | Should -Be 'prompt'
+        }
+    }
+
+    It 'lower-cases a valid-but-miscased PostExtractionAction' {
+        InModuleScope CfgUnderTest {
+            $script:PostExtractionAction = 'DELETE'
+            Test-ConfigSane
+            $script:PostExtractionAction | Should -Be 'delete'
+        }
+    }
+
+    It 'preserves a valid PostExtractionAction' {
+        InModuleScope CfgUnderTest {
+            $script:PostExtractionAction = 'sort'
+            Test-ConfigSane
+            $script:PostExtractionAction | Should -Be 'sort'
+        }
+    }
+}
+
+Describe 'Post-extraction & power defaults' {
+    It 'defaults AskOutputBehavior to enabled' {
+        InModuleScope CfgUnderTest {
+            $script:AskOutputBehavior | Should -BeTrue
+        }
+    }
+
+    It 'defaults PreventSleepDuringExtraction to enabled' {
+        InModuleScope CfgUnderTest {
+            $script:PreventSleepDuringExtraction | Should -BeTrue
+        }
+    }
 }
