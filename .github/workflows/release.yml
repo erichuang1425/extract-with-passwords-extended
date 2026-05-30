@@ -21,7 +21,7 @@ jobs:
           tag="${GITHUB_REF_NAME}"
           stage="dist/ArchivePwExtract-${tag}"
           mkdir -p "$stage/Modules" "$stage/Resources"
-          cp TryPwExtract.ps1 Install-ArchivePwExtract.ps1 README.md LICENSE CHANGELOG.md "$stage/"
+          cp TryPwExtract.ps1 Install-ArchivePwExtract.ps1 Install.cmd README.md LICENSE CHANGELOG.md "$stage/"
           cp Modules/*.ps1 "$stage/Modules/"
           cp Resources/*.xaml "$stage/Resources/"
           (cd dist && zip -r "ArchivePwExtract-${tag}.zip" "ArchivePwExtract-${tag}")
