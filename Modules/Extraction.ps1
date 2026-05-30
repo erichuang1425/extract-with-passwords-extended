@@ -33,30 +33,21 @@ function Get-PeaZipBundledSevenZipPath {
 }
 
 function Get-WinRarOrUnRarPath {
-    # Prefer the console executables (UnRAR.exe, then Rar.exe) over the GUI
-    # WinRAR.exe. WinRAR.exe is a windowed app: running it pops up dialogs, so it
-    # is only used as a last resort (and then in background mode — see below).
     $found = Find-FirstExistingPath @(
-        "$env:ProgramFiles\WinRAR\UnRAR.exe",
-        "${env:ProgramFiles(x86)}\WinRAR\UnRAR.exe",
-        "$env:LOCALAPPDATA\Programs\WinRAR\UnRAR.exe",
-        "$env:ProgramFiles\WinRAR\Rar.exe",
-        "${env:ProgramFiles(x86)}\WinRAR\Rar.exe",
-        "$env:LOCALAPPDATA\Programs\WinRAR\Rar.exe",
         "$env:ProgramFiles\WinRAR\WinRAR.exe",
         "${env:ProgramFiles(x86)}\WinRAR\WinRAR.exe",
-        "$env:LOCALAPPDATA\Programs\WinRAR\WinRAR.exe"
+        "$env:LOCALAPPDATA\Programs\WinRAR\WinRAR.exe",
+        "$env:ProgramFiles\WinRAR\UnRAR.exe",
+        "${env:ProgramFiles(x86)}\WinRAR\UnRAR.exe",
+        "$env:LOCALAPPDATA\Programs\WinRAR\UnRAR.exe"
     )
     if ($found) { return $found }
 
-    $cmd = Get-Command "UnRAR.exe" -ErrorAction SilentlyContinue
+    $cmd = Get-Command "WinRAR.exe" -ErrorAction SilentlyContinue
     if ($cmd) { return $cmd.Source }
 
-    $cmd2 = Get-Command "Rar.exe" -ErrorAction SilentlyContinue
+    $cmd2 = Get-Command "UnRAR.exe" -ErrorAction SilentlyContinue
     if ($cmd2) { return $cmd2.Source }
-
-    $cmd3 = Get-Command "WinRAR.exe" -ErrorAction SilentlyContinue
-    if ($cmd3) { return $cmd3.Source }
 
     return $null
 }
@@ -72,10 +63,6 @@ function Get-EngineName {
 
     if ($leaf -eq "unrar.exe") {
         return "UnRAR"
-    }
-
-    if ($leaf -eq "rar.exe") {
-        return "Rar"
     }
 
     if ($leaf -eq "winrar.exe") {
@@ -97,14 +84,6 @@ function Test-EngineWorks {
     param([string]$EnginePath)
 
     if (-not $EnginePath) { return $false }
-
-    # WinRAR.exe is a GUI application; launching it with no arguments opens its
-    # file-manager window (showing the current/source folder). Never probe it
-    # that way — trust its presence instead. Console engines (UnRAR/Rar/7z) are
-    # safe to smoke-test with empty args.
-    if ([IO.Path]::GetFileName($EnginePath).ToLowerInvariant() -eq "winrar.exe") {
-        return (Test-Path -LiteralPath $EnginePath)
-    }
 
     try {
         $psi = New-Object System.Diagnostics.ProcessStartInfo
@@ -236,9 +215,6 @@ function Test-WithWinRar {
     )
 
     $argumentList = @("t", "-idq", "-y")
-    if ([IO.Path]::GetFileName($RarExe).ToLowerInvariant() -eq "winrar.exe") {
-        $argumentList += "-ibck"   # run the GUI WinRAR minimized in the background
-    }
     $argumentList += @(New-RarPasswordArgs -Password $Password)
     $argumentList += $Archive
 
@@ -264,9 +240,6 @@ function Extract-WithWinRar {
     $dest = $OutputDir.TrimEnd('\') + '\'
 
     $argumentList = @("x", "-y", "-idq", $WinRarOverwriteMode)
-    if ([IO.Path]::GetFileName($RarExe).ToLowerInvariant() -eq "winrar.exe") {
-        $argumentList += "-ibck"   # run the GUI WinRAR minimized in the background
-    }
     $argumentList += @(New-RarPasswordArgs -Password $Password)
     $argumentList += $Archive
     $argumentList += $dest
@@ -322,7 +295,7 @@ function Try-EnginePassword {
                 $extractOk = Extract-With7z -SevenZip $EnginePath -Archive $Archive -Password $Password -OutputDir $OutputDir -OmitPasswordIfEmpty $OmitPasswordArg -Timeout $Timeout
             }
         }
-    } elseif ($EngineName -in @("WinRAR", "UnRAR", "Rar")) {
+    } elseif ($EngineName -eq "WinRAR" -or $EngineName -eq "UnRAR") {
         $testOk = Test-WithWinRar -RarExe $EnginePath -Archive $Archive -Password $Password -Timeout $Timeout
 
         if (-not $TestOnly) {
@@ -377,17 +350,6 @@ function Get-EnginePlanForArchive {
             if (-not $seen[$WinRar]) {
                 $plan += @{ Name = $winRarName; Path = $WinRar }
                 $seen[$WinRar] = $true
-            }
-        } elseif (-not ($UseSevenZip -and $SevenZip) -and -not ($UsePeaZipBundled7zFallback -and $PeaZip7z)) {
-            # Non-RAR archive whose resolved RAR engine is console-only
-            # (UnRAR/Rar) and no universal 7-Zip/PeaZip engine is available.
-            # Preferring the console binary must not lose WinRAR's ability to
-            # handle ZIP/7z/etc., so fall back to a sibling WinRAR.exe (which
-            # runs minimized via -ibck during extraction).
-            $guiPath = Join-Path (Split-Path $WinRar -Parent) "WinRAR.exe"
-            if ((Test-Path -LiteralPath $guiPath) -and -not $seen[$guiPath]) {
-                $plan += @{ Name = "WinRAR"; Path = $guiPath }
-                $seen[$guiPath] = $true
             }
         }
     }

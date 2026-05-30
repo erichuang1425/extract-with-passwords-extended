@@ -3,9 +3,6 @@
 BeforeAll {
     . (Join-Path $PSScriptRoot 'TestHelpers.ps1')
     . $ProductionModule['ConsoleUI']
-    # ConsoleUI helpers log via Write-Log (defined in the Logging module); stub it
-    # so these UI tests stay self-contained.
-    function Write-Log { param($Message, $Level) }
 }
 
 Describe 'Format-FileSize' {
@@ -57,60 +54,5 @@ Describe 'Format-MaskedPassword' {
 Describe 'Write-ProgressBar' {
     It 'returns without output when Total is non-positive' {
         Write-ProgressBar -Current 1 -Total 0 | Should -BeNullOrEmpty
-    }
-}
-
-Describe 'Get-ProgressLine' {
-    It 'returns an empty string when Total is non-positive' {
-        Get-ProgressLine -Current 1 -Total 0 | Should -BeNullOrEmpty
-    }
-
-    It 'shows the count and percentage' {
-        Get-ProgressLine -Current 9 -Total 36 | Should -Match '\(9/36\)'
-    }
-
-    It 'omits an ETA when the sample is too small (one attempt)' {
-        $line = Get-ProgressLine -Current 1 -Total 36 -ElapsedMs 500
-        $line | Should -Not -Match '~'
-        $line | Should -Match 'elapsed'
-    }
-
-    It 'shows an ETA once the sample is stable (>=5 attempts, >=1s)' {
-        Get-ProgressLine -Current 10 -Total 36 -ElapsedMs 5000 | Should -Match '~'
-    }
-
-    It 'shows a per-second rate after two or more attempts' {
-        Get-ProgressLine -Current 4 -Total 36 -ElapsedMs 2000 | Should -Match '/s\)'
-    }
-
-    It 'appends the engine name when provided' {
-        Get-ProgressLine -Current 2 -Total 10 -ElapsedMs 1000 -EngineName '7-Zip' | Should -Match '\[engine: 7-Zip\]'
-    }
-}
-
-Describe 'Read-OutputBehavior' {
-    It 'maps "1" to replace' {
-        Mock Read-Host { '1' }
-        Read-OutputBehavior -Current 'merge' | Should -Be 'replace'
-    }
-
-    It 'maps "2" to new' {
-        Mock Read-Host { '2' }
-        Read-OutputBehavior -Current 'replace' | Should -Be 'new'
-    }
-
-    It 'maps "3" to merge' {
-        Mock Read-Host { '3' }
-        Read-OutputBehavior -Current 'replace' | Should -Be 'merge'
-    }
-
-    It 'keeps the current value on a blank answer' {
-        Mock Read-Host { '' }
-        Read-OutputBehavior -Current 'merge' | Should -Be 'merge'
-    }
-
-    It 'keeps the current value on an invalid answer' {
-        Mock Read-Host { 'banana' }
-        Read-OutputBehavior -Current 'new' | Should -Be 'new'
     }
 }

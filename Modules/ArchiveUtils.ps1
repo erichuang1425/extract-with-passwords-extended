@@ -59,7 +59,7 @@ function Get-ArchiveBaseName {
         "\.zip\.001$",
         "\.7z\.001$",
         "\.rar\.001$",
-        "[._\s-]part\d+\.rar$",
+        "\.part0*1\.rar$",
         "\.001$",
         "\.zipx$",
         "\.zip$",
@@ -154,12 +154,8 @@ function Test-IsFirstVolumeOrNormalArchive {
 
     $n = [IO.Path]::GetFileName($Path)
 
-    # Multi-part "partNN.rar" sets. The separator before "part" may be a dot
-    # (WinRAR default), underscore, hyphen, or space (renamed/foreign sets).
-    # Requiring a real separator means a literal name like "mypart1.rar" is
-    # still treated as a normal standalone archive.
-    if ($n -imatch "[._\s-]part\d+\.rar$") {
-        return ($n -imatch "[._\s-]part0*1\.rar$")
+    if ($n -imatch "\.part\d+\.rar$") {
+        return ($n -imatch "\.part0*1\.rar$")
     }
 
     if ($n -imatch "\.r\d{2,}$") {
@@ -222,15 +218,14 @@ function Test-MultiVolumeComplete {
         return @{ Complete = ($missing.Count -eq 0); Missing = $missing }
     }
 
-    if ($name -imatch "([._\s-])part0*1\.rar$") {
-        $sep = $Matches[1]
-        $pattern = $name -ireplace "[._\s-]part0*1\.rar$", ""
-        $globPattern = "{0}{1}part*.rar" -f $pattern, $sep
+    if ($name -imatch "\.part0*1\.rar$") {
+        $pattern = $name -ireplace "\.part0*1\.rar$", ""
+        $globPattern = "{0}.part*.rar" -f $pattern
         $present = @{}
         try {
             Get-ChildItem -LiteralPath $dir -Filter $globPattern -File -ErrorAction SilentlyContinue |
                 ForEach-Object {
-                    if ($_.Name -imatch '[._\s-]part0*(\d+)\.rar$') {
+                    if ($_.Name -imatch '\.part0*(\d+)\.rar$') {
                         $present[[int]$Matches[1]] = $true
                     }
                 }
@@ -244,7 +239,7 @@ function Test-MultiVolumeComplete {
         $missing = @()
         for ($vol = 2; $vol -le $maxVol; $vol++) {
             if (-not $present.ContainsKey($vol)) {
-                $missing += ("{0}{1}part{2:D2}.rar" -f $pattern, $sep, $vol)
+                $missing += ("{0}.part{1:D2}.rar" -f $pattern, $vol)
             }
         }
         return @{ Complete = ($missing.Count -eq 0); Missing = $missing }
@@ -481,28 +476,19 @@ function Find-OrphanedSplitEntries {
     $promoted = @()
     $rarHave = @{}
     foreach ($a in $Archives) {
-        if ($a -imatch '\.rar$' -or $a -imatch '[._\s-]part0*1\.rar$') {
+        if ($a -imatch '\.rar$' -or $a -imatch '\.part0*1\.rar$') {
             $rarHave[(Split-Path $a -Parent).ToLowerInvariant()] = $true
         }
     }
 
     $rGroups = @{}
     $zGroups = @{}
-    $partGroups = @{}
     foreach ($s in $Skipped) {
         $name = [IO.Path]::GetFileName($s)
         $dir = Split-Path $s -Parent
         $dirKey = $dir.ToLowerInvariant()
 
-        if ($name -imatch '^(.+)([._\s-])part0*(\d+)\.rar$') {
-            if ($rarHave.ContainsKey($dirKey)) { continue }
-            $base = $Matches[1]
-            $sep = $Matches[2]
-            $num = [int]$Matches[3]
-            $key = (Join-Path $dir ($base + $sep)).ToLowerInvariant()
-            if (-not $partGroups.ContainsKey($key)) { $partGroups[$key] = @() }
-            $partGroups[$key] += [PSCustomObject]@{ Path = $s; Num = $num }
-        } elseif ($name -imatch '^(.+)\.r(\d{2,})$') {
+        if ($name -imatch '^(.+)\.r(\d{2,})$') {
             if ($rarHave.ContainsKey($dirKey)) { continue }
             $base = $Matches[1]
             $num = [int]$Matches[2]
@@ -518,10 +504,6 @@ function Find-OrphanedSplitEntries {
         }
     }
 
-    foreach ($key in $partGroups.Keys) {
-        $entry = $partGroups[$key] | Sort-Object Num | Select-Object -First 1
-        if ($entry) { $promoted += $entry.Path }
-    }
     foreach ($key in $rGroups.Keys) {
         $entry = $rGroups[$key] | Sort-Object Num | Select-Object -First 1
         if ($entry) { $promoted += $entry.Path }
@@ -532,113 +514,6 @@ function Find-OrphanedSplitEntries {
     }
 
     return $promoted
-}
-
-function Get-ArchiveVolumeSet {
-    # Given the entry file of an archive, return every on-disk file that belongs
-    # to the same (possibly multi-volume) set, including the entry itself. This is
-    # the inverse of the volume-detection logic and is used to delete/move a whole
-    # set together rather than just the first volume.
-    param([string]$EntryArchive)
-
-    $result = New-Object System.Collections.Generic.List[string]
-    [void]$result.Add($EntryArchive)
-
-    try {
-        $name = [IO.Path]::GetFileName($EntryArchive)
-        $dir = Split-Path $EntryArchive -Parent
-        if ([string]::IsNullOrEmpty($dir)) { $dir = "." }
-
-        $glob = $null
-        $regex = $null
-
-        if ($name -imatch '([._\s-])part0*\d+\.rar$') {
-            $sep = $Matches[1]
-            $base = $name -ireplace '[._\s-]part0*\d+\.rar$', ''
-            $glob = "{0}{1}part*.rar" -f $base, $sep
-            $regex = '[._\s-]part0*\d+\.rar$'
-        } elseif ($name -imatch '\.\d{3}$') {
-            # numeric volumes, incl. .zip.001 / .7z.001 / .rar.001
-            $base = $name -ireplace '\.\d{3}$', ''
-            $glob = "{0}.*" -f $base
-            $regex = '\.\d{3}$'
-        } elseif ($name -imatch '\.rar$') {
-            # old-style .rNN set: name.rar + name.r00, name.r01, ...
-            $base = $name -ireplace '\.rar$', ''
-            $glob = "{0}.r*" -f $base
-            $regex = '\.r\d{2,}$'
-        } elseif ($name -imatch '\.zip$') {
-            # old-style .zNN set: name.zip + name.z01, name.z02, ...
-            $base = $name -ireplace '\.zip$', ''
-            $glob = "{0}.z*" -f $base
-            $regex = '\.z\d+$'
-        }
-
-        # NOTE: -Filter supports only * and ? (not [0-9] ranges) on every
-        # platform, so the glob is intentionally broad and the regex below does
-        # the precise volume matching.
-        if ($glob) {
-            Get-ChildItem -LiteralPath $dir -Filter $glob -File -ErrorAction SilentlyContinue |
-                Where-Object { $_.Name -imatch $regex } |
-                ForEach-Object { [void]$result.Add($_.FullName) }
-        }
-    } catch {
-        Write-Log "Could not enumerate volume set for $EntryArchive : $($_.Exception.Message)" "WARN"
-    }
-
-    return @($result.ToArray() | Sort-Object -Unique)
-}
-
-function Remove-ArchiveSet {
-    # Delete every file of an archive's volume set. Returns the number removed.
-    param([string]$EntryArchive)
-
-    $removed = 0
-    foreach ($file in (Get-ArchiveVolumeSet -EntryArchive $EntryArchive)) {
-        try {
-            if (Test-Path -LiteralPath $file) {
-                Remove-Item -LiteralPath $file -Force -ErrorAction Stop
-                Write-Log "Deleted source archive file: $file"
-                $removed++
-            }
-        } catch {
-            Write-Log "Could not delete $file : $($_.Exception.Message)" "WARN"
-        }
-    }
-    return $removed
-}
-
-function Move-ArchiveSet {
-    # Move every file of an archive's volume set into <parent>\$DestSubfolder.
-    # Returns the number of files moved.
-    param(
-        [string]$EntryArchive,
-        [string]$DestSubfolder
-    )
-
-    $moved = 0
-    foreach ($file in (Get-ArchiveVolumeSet -EntryArchive $EntryArchive)) {
-        try {
-            if (-not (Test-Path -LiteralPath $file)) { continue }
-
-            $parent = Split-Path $file -Parent
-            # Idempotency: skip files already inside the target subfolder.
-            if ((Split-Path $parent -Leaf) -ieq $DestSubfolder) { continue }
-
-            $destDir = Join-Path $parent $DestSubfolder
-            New-Item -ItemType Directory -Force -Path $destDir | Out-Null
-            $destPath = Join-Path $destDir (Split-Path $file -Leaf)
-            if (Test-Path -LiteralPath $destPath) {
-                Remove-Item -LiteralPath $destPath -Force -ErrorAction SilentlyContinue
-            }
-            Move-Item -LiteralPath $file -Destination $destPath -Force -ErrorAction Stop
-            Write-Log "Moved $file -> $destPath"
-            $moved++
-        } catch {
-            Write-Log "Could not move $file : $($_.Exception.Message)" "WARN"
-        }
-    }
-    return $moved
 }
 
 function Test-ArchiveIsEncrypted {
