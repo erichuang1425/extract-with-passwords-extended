@@ -7,33 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-- **Multi-part archives with non-dot separators are no longer extracted multiple
-  times.** Sets named `Name_part1.rar`, `Name_part2.rar`, … (underscore, hyphen,
-  or space before `part`, not just the WinRAR-default dot) were each treated as a
-  separate standalone archive, producing one duplicate output folder per part and
-  reporting the non-first parts as failures. Detection now recognizes a flexible
-  separator: only the first volume is queued, and its output folder uses the clean
-  base name.
-- **No more WinRAR window popping up.** The console `UnRAR.exe` / `Rar.exe` are now
-  preferred over the GUI `WinRAR.exe`; the startup engine smoke-test no longer
-  launches `WinRAR.exe` with empty arguments (which opened its file-manager
-  window), and if `WinRAR.exe` must be used it runs minimized in the background
-  (`-ibck`).
-
-### Added
-- **Choose how existing output is handled, each run** (`askOutputBehavior`): a
-  prompt to overwrite, keep both (new `_2`/`_3` folder), or merge & skip duplicate
-  files.
-- **Post-extraction handling of the original archives** (`postExtractionAction`):
-  leave them, delete the successfully-extracted ones, or sort them into
-  `_Extracted` / `_Failed` folders — all volume parts are handled together.
-- **Keep the system awake during long runs** (`preventSleepDuringExtraction`): the
-  machine no longer idle-sleeps mid-extraction (the display may still sleep).
-- A clearer progress indicator: it now shows elapsed time and a passwords/sec
-  rate, and only shows a remaining-time estimate once the sample is large enough
-  to be meaningful (instead of a misleading one-sample "~1s left").
-
 ## [4.1.1] - 2026-05-29
 
 ### Fixed

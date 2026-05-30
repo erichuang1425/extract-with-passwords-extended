@@ -22,11 +22,10 @@ $ModulesDir = Join-Path $RepoRoot 'Modules'
 # included only for its pure-logic error classifier (Get-ExtractionErrorType /
 # Get-LastEngineFailureType); its engine-invocation functions are not tested.
 $ProductionModule = @{
-    Config          = Join-Path $ModulesDir 'Config.ps1'
-    Logging         = Join-Path $ModulesDir 'Logging.ps1'
-    ConsoleUI       = Join-Path $ModulesDir 'ConsoleUI.ps1'
-    ArchiveUtils    = Join-Path $ModulesDir 'ArchiveUtils.ps1'
-    Passwords       = Join-Path $ModulesDir 'Passwords.ps1'
-    Extraction      = Join-Path $ModulesDir 'Extraction.ps1'
-    PowerManagement = Join-Path $ModulesDir 'PowerManagement.ps1'
+    Config       = Join-Path $ModulesDir 'Config.ps1'
+    Logging      = Join-Path $ModulesDir 'Logging.ps1'
+    ConsoleUI    = Join-Path $ModulesDir 'ConsoleUI.ps1'
+    ArchiveUtils = Join-Path $ModulesDir 'ArchiveUtils.ps1'
+    Passwords    = Join-Path $ModulesDir 'Passwords.ps1'
+    Extraction   = Join-Path $ModulesDir 'Extraction.ps1'
 }
