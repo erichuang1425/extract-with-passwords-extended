@@ -40,7 +40,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        suite: [Config, Logging, ConsoleUI, ArchiveUtils, Passwords, Extraction]
+        suite: [Config, Logging, ConsoleUI, ArchiveUtils, Passwords, Extraction, PowerManagement]
     defaults:
       run:
         shell: pwsh
