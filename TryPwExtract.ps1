@@ -48,6 +48,7 @@ if ($LogRetentionDays -gt 0) {
 . "$ModulesDir\Passwords.ps1"
 . "$ModulesDir\NestedExtraction.ps1"
 . "$ModulesDir\Parallel.ps1"
+. "$ModulesDir\PowerManagement.ps1"
 . "$ModulesDir\WpfGui.ps1"
 
 # ============================================================
@@ -245,6 +246,16 @@ try {
         }
     }
 
+    if ($AskOutputBehavior) {
+        $ExistingOutputBehavior = Read-OutputBehavior -Current $ExistingOutputBehavior
+        if ($ExistingOutputBehavior -eq "merge") {
+            # "Merge, skip duplicate files": keep the folder and skip files that
+            # already exist (7-Zip -aos / WinRAR -o-) instead of overwriting.
+            $SevenZipOverwriteMode = "aos"
+            $WinRarOverwriteMode = "-o-"
+        }
+    }
+
     Write-Status "Output behavior:" "info"
     switch ($ExistingOutputBehavior.ToLowerInvariant()) {
         "replace" { Write-Status "Existing extracted folders will be REPLACED." "dim" }
@@ -359,6 +370,13 @@ try {
     $FailureReasons = @{}     # reason -> count
     $CacheHitCount = 0
     $CacheMissCount = 0
+
+    # Keep the machine awake for the (potentially long) extraction phase. The
+    # matching Disable-KeepAwake runs in the outer finally so every exit path
+    # restores normal sleep behavior.
+    if ($PreventSleepDuringExtraction) {
+        Enable-KeepAwake
+    }
 
     # ============================================================
     # Parallel archive mode
@@ -1208,6 +1226,51 @@ try {
         Write-Status "Diagnostic log: $RunLogPath" "dim"
     }
 
+    # Post-extraction handling of the ORIGINAL source archives (all volume parts).
+    if ($PostExtractionAction -ne "none" -and (@($Succeeded).Count -gt 0 -or @($Failed).Count -gt 0)) {
+        $action = ([string]$PostExtractionAction).ToLowerInvariant()
+
+        if ($action -eq "prompt") {
+            Write-Both "" "INFO"
+            Write-Status "What should I do with the original archive files?" "info"
+            Write-Host "  [1] " -ForegroundColor Cyan -NoNewline; Write-Host "Leave them as they are (default)"
+            Write-Host "  [2] " -ForegroundColor Cyan -NoNewline; Write-Host "Delete successfully-extracted archives (all parts)"
+            Write-Host "  [3] " -ForegroundColor Cyan -NoNewline; Write-Host "Sort into _Extracted / _Failed folders"
+            Write-Host "  Select (1-3, Enter = 1): " -ForegroundColor Magenta -NoNewline
+            $choice = Read-Host
+            Write-Log "Post-extraction prompt answer: $choice"
+            switch ($choice.Trim()) {
+                "2" { $action = "delete" }
+                "3" { $action = "sort" }
+                default { $action = "none" }
+            }
+        }
+
+        $successEntries = @(@($Succeeded) + @($NoPassword) | Sort-Object -Unique)
+
+        if ($action -eq "delete") {
+            $confirmDelete = $true
+            if (-not $PostExtractionSilent) {
+                $confirmDelete = Read-YesNo "Delete $($successEntries.Count) successfully-extracted archive(s) and all their volume parts? This cannot be undone." $false
+            }
+            if ($confirmDelete) {
+                $deleted = 0
+                foreach ($entry in $successEntries) { $deleted += Remove-ArchiveSet -EntryArchive $entry }
+                Write-Status "Deleted $deleted source archive file(s)." "success"
+                Write-Log "Post-extraction delete removed $deleted file(s)."
+            } else {
+                Write-Status "Deletion cancelled; archives left in place." "dim"
+            }
+        } elseif ($action -eq "sort") {
+            $movedOk = 0
+            $movedFail = 0
+            foreach ($entry in $successEntries) { $movedOk += Move-ArchiveSet -EntryArchive $entry -DestSubfolder "_Extracted" }
+            foreach ($entry in @($Failed)) { $movedFail += Move-ArchiveSet -EntryArchive $entry -DestSubfolder "_Failed" }
+            Write-Status "Sorted archives: $movedOk file(s) into _Extracted, $movedFail into _Failed." "success"
+            Write-Log "Post-extraction sort: $movedOk extracted, $movedFail failed."
+        }
+    }
+
     if ($OpenOutputAfterSuccess -and @($OutputFolders).Count -gt 0) {
         $openFirst = Read-YesNo "Open first output folder?" $true
 
@@ -1245,4 +1308,9 @@ catch {
     Write-Log "Fatal error: $($_.Exception.ToString())" "ERROR"
     Pause-Close
     exit 1
+}
+finally {
+    # Always restore normal sleep behavior, even on early exit. PowerShell runs
+    # finally blocks on `exit`, and Disable-KeepAwake is a no-op if never enabled.
+    Disable-KeepAwake
 }

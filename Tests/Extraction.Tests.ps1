@@ -71,3 +71,31 @@ Describe 'Get-LastEngineFailureType' {
         Get-LastEngineFailureType -ArchiveKnownEncrypted $true | Should -Be 'WrongPassword'
     }
 }
+
+Describe 'Get-EngineName' {
+    It 'maps engine executables to display names' -ForEach @(
+        @{ Path = 'C:/WinRAR/UnRAR.exe'; Expected = 'UnRAR' }
+        @{ Path = 'C:/WinRAR/Rar.exe';   Expected = 'Rar' }
+        @{ Path = 'C:/WinRAR/WinRAR.exe'; Expected = 'WinRAR' }
+        @{ Path = 'C:/7-Zip/7z.exe';      Expected = '7-Zip' }
+        @{ Path = 'C:/PeaZip/res/bin/7z/7z.exe'; Expected = 'PeaZip bundled 7z' }
+    ) {
+        Get-EngineName -Path $Path | Should -Be $Expected
+    }
+
+    It 'returns None for an empty path' {
+        Get-EngineName -Path '' | Should -Be 'None'
+    }
+}
+
+Describe 'Test-EngineWorks (WinRAR GUI)' {
+    It 'treats a present WinRAR.exe as working without launching it' {
+        $dummy = Join-Path $TestDrive 'WinRAR.exe'
+        New-Item -ItemType File -Force -Path $dummy | Out-Null
+        Test-EngineWorks -EnginePath $dummy | Should -BeTrue
+    }
+
+    It 'returns false for a missing path' {
+        Test-EngineWorks -EnginePath '' | Should -BeFalse
+    }
+}

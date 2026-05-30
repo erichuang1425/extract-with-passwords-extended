@@ -104,7 +104,11 @@ if (!(Test-Path -LiteralPath $ConfigPath)) {
     "preferGui": false,
     "extractNestedArchives": false,
     "maxNestedDepth": 1,
-    "deleteNestedArchiveAfterExtract": false
+    "deleteNestedArchiveAfterExtract": false,
+    "askOutputBehavior": true,
+    "postExtractionAction": "prompt",
+    "postExtractionSilent": false,
+    "preventSleepDuringExtraction": true
 }
 "@ | Set-Content -LiteralPath $ConfigPath -Encoding UTF8
 }
@@ -126,6 +130,7 @@ $moduleFiles = @(
     "Passwords.ps1",
     "NestedExtraction.ps1",
     "Parallel.ps1",
+    "PowerManagement.ps1",
     "WpfGui.ps1"
 )
 

@@ -175,7 +175,11 @@ Settings are stored in `%LOCALAPPDATA%\ArchivePwExtract\config.json` and survive
 | `preferGui` | `false` | Launch WPF GUI instead of console mode (requires PS 5.1+) |
 | `extractNestedArchives` | `false` | After extraction, scan output folders and extract archives found inside them |
 | `maxNestedDepth` | `1` | How many levels of nesting to recurse into (0 disables; clamped to 1–10) |
-| `deleteNestedArchiveAfterExtract` | `false` | Delete a nested archive file after it is successfully extracted |
+| `deleteNestedArchiveAfterExtract` | `false` | Delete a nested archive file after it is successfully extracted (applies to archives found *inside* output, not the original inputs) |
+| `askOutputBehavior` | `true` | Prompt each run to choose how existing extracted folders are handled: overwrite, keep both, or merge & skip duplicates |
+| `postExtractionAction` | `"prompt"` | What to do with the original source archives after a run: `none`, `prompt`, `delete` (successful sets, all volume parts), or `sort` (move into `_Extracted` / `_Failed`) |
+| `postExtractionSilent` | `false` | When `postExtractionAction` is `delete`, skip the confirmation prompt |
+| `preventSleepDuringExtraction` | `true` | Keep the system awake (no idle-sleep) while extraction is running; the display is allowed to sleep |
 
 ## Supported Formats
 

@@ -65,7 +65,7 @@ function Invoke-ParallelPasswordTest {
                 try {
                     if ($engine.Name -eq "7-Zip" -or $engine.Name -eq "PeaZip bundled 7z") {
                         $testOk = Test-With7z -SevenZip $engine.Path -Archive $Archive -Password $pw -Timeout $Timeout
-                    } elseif ($engine.Name -eq "WinRAR" -or $engine.Name -eq "UnRAR") {
+                    } elseif ($engine.Name -in @("WinRAR", "UnRAR", "Rar")) {
                         $testOk = Test-WithWinRar -RarExe $engine.Path -Archive $Archive -Password $pw -Timeout $Timeout
                     }
                 } catch {
