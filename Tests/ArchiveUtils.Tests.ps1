@@ -30,6 +30,65 @@ Describe 'Get-ArchiveBaseName' {
     It 'strips a plain .7z extension' {
         Get-ArchiveBaseName 'photos.7z' | Should -Be 'photos'
     }
+
+    It 'strips an underscore-separated _part1.rar volume suffix' {
+        Get-ArchiveBaseName 'X_part1.rar' | Should -Be 'X'
+    }
+
+    It 'strips an underscore-separated middle part too' {
+        Get-ArchiveBaseName 'X_part3.rar' | Should -Be 'X'
+    }
+
+    It 'strips hyphen- and space-separated part suffixes' {
+        Get-ArchiveBaseName 'X-part1.rar' | Should -Be 'X'
+        Get-ArchiveBaseName 'X part1.rar' | Should -Be 'X'
+    }
+
+    It 'keeps a literal "part" name with no separator as-is' {
+        Get-ArchiveBaseName 'mypart1.rar' | Should -Be 'mypart1'
+    }
+
+    It 'handles a multi-byte (Japanese) base name' {
+        Get-ArchiveBaseName '日本語_part1.rar' | Should -Be '日本語'
+    }
+}
+
+Describe 'Test-IsFirstVolumeOrNormalArchive' {
+    It 'treats only the first underscore-separated part as the entry' -ForEach @(
+        @{ Name = 'X_part1.rar';   Expected = $true }
+        @{ Name = 'X_part01.rar';  Expected = $true }
+        @{ Name = 'X_part001.rar'; Expected = $true }
+        @{ Name = 'X_part2.rar';   Expected = $false }
+        @{ Name = 'X_part3.rar';   Expected = $false }
+        @{ Name = 'X_part4.rar';   Expected = $false }
+    ) {
+        Test-IsFirstVolumeOrNormalArchive $Name | Should -Be $Expected
+    }
+
+    It 'handles dot/hyphen/space separators the same way' -ForEach @(
+        @{ Name = 'X.part1.rar';  Expected = $true }
+        @{ Name = 'X.part2.rar';  Expected = $false }
+        @{ Name = 'X-part1.rar';  Expected = $true }
+        @{ Name = 'X-part2.rar';  Expected = $false }
+        @{ Name = 'X part2.rar';  Expected = $false }
+    ) {
+        Test-IsFirstVolumeOrNormalArchive $Name | Should -Be $Expected
+    }
+
+    It 'treats names without a real separator before "part" as normal archives' {
+        Test-IsFirstVolumeOrNormalArchive 'mypart1.rar' | Should -BeTrue
+        Test-IsFirstVolumeOrNormalArchive 'mypart2.rar' | Should -BeTrue
+    }
+
+    It 'keeps existing volume-form behavior' -ForEach @(
+        @{ Name = 'normal.rar'; Expected = $true }
+        @{ Name = 'data.001';   Expected = $true }
+        @{ Name = 'data.002';   Expected = $false }
+        @{ Name = 'data.r01';   Expected = $false }
+        @{ Name = 'data.z02';   Expected = $false }
+    ) {
+        Test-IsFirstVolumeOrNormalArchive $Name | Should -Be $Expected
+    }
 }
 
 Describe 'Test-IsSupportedArchiveName' {
@@ -105,6 +164,86 @@ Describe 'Find-NestedArchives' {
 
     It 'returns an empty result for a non-existent root' {
         @(Find-NestedArchives -Root (Join-Path $TestDrive 'does-not-exist')).Count | Should -Be 0
+    }
+}
+
+Describe 'Test-MultiVolumeComplete (underscore part sets)' {
+    BeforeAll {
+        $script:volDir = Join-Path $TestDrive 'vol'
+        New-Item -ItemType Directory -Force -Path $script:volDir | Out-Null
+    }
+
+    It 'reports a complete underscore-separated set' {
+        $d = Join-Path $script:volDir 'complete'
+        New-Item -ItemType Directory -Force -Path $d | Out-Null
+        1..3 | ForEach-Object { New-Item -ItemType File -Force -Path (Join-Path $d "S_part$_.rar") | Out-Null }
+        (Test-MultiVolumeComplete -Archive (Join-Path $d 'S_part1.rar')).Complete | Should -BeTrue
+    }
+
+    It 'detects a missing middle volume and names it with the same separator' {
+        # part2 must be present for the gap heuristic to engage (an absent part2
+        # is treated as a single-volume archive by design); here part3 is missing.
+        $d = Join-Path $script:volDir 'gappy'
+        New-Item -ItemType Directory -Force -Path $d | Out-Null
+        'S_part1.rar', 'S_part2.rar', 'S_part4.rar' | ForEach-Object {
+            New-Item -ItemType File -Force -Path (Join-Path $d $_) | Out-Null
+        }
+        $r = Test-MultiVolumeComplete -Archive (Join-Path $d 'S_part1.rar')
+        $r.Complete | Should -BeFalse
+        ($r.Missing -join ',') | Should -Match 'S_part03\.rar'
+    }
+}
+
+Describe 'Get-ArchiveVolumeSet' {
+    It 'returns all underscore-separated parts of a set' {
+        $d = Join-Path $TestDrive 'gvs_part'
+        New-Item -ItemType Directory -Force -Path $d | Out-Null
+        1..3 | ForEach-Object { New-Item -ItemType File -Force -Path (Join-Path $d "A_part$_.rar") | Out-Null }
+        $set = @(Get-ArchiveVolumeSet -EntryArchive (Join-Path $d 'A_part1.rar') | ForEach-Object { [IO.Path]::GetFileName($_) } | Sort-Object)
+        $set | Should -Be @('A_part1.rar', 'A_part2.rar', 'A_part3.rar')
+    }
+
+    It 'returns all numeric .NNN volumes' {
+        $d = Join-Path $TestDrive 'gvs_num'
+        New-Item -ItemType Directory -Force -Path $d | Out-Null
+        '001', '002', '003' | ForEach-Object { New-Item -ItemType File -Force -Path (Join-Path $d "data.$_") | Out-Null }
+        @(Get-ArchiveVolumeSet -EntryArchive (Join-Path $d 'data.001')).Count | Should -Be 3
+    }
+
+    It 'includes the base .rar member alongside .rNN parts' {
+        $d = Join-Path $TestDrive 'gvs_rnn'
+        New-Item -ItemType Directory -Force -Path $d | Out-Null
+        'vid.rar', 'vid.r00', 'vid.r01' | ForEach-Object { New-Item -ItemType File -Force -Path (Join-Path $d $_) | Out-Null }
+        $set = @(Get-ArchiveVolumeSet -EntryArchive (Join-Path $d 'vid.rar') | ForEach-Object { [IO.Path]::GetFileName($_) } | Sort-Object)
+        $set | Should -Be @('vid.r00', 'vid.r01', 'vid.rar')
+    }
+
+    It 'returns just the entry for a standalone archive' {
+        $d = Join-Path $TestDrive 'gvs_solo'
+        New-Item -ItemType Directory -Force -Path $d | Out-Null
+        New-Item -ItemType File -Force -Path (Join-Path $d 'solo.7z') | Out-Null
+        @(Get-ArchiveVolumeSet -EntryArchive (Join-Path $d 'solo.7z')).Count | Should -Be 1
+    }
+}
+
+Describe 'Remove-ArchiveSet / Move-ArchiveSet' {
+    It 'deletes every part of the set' {
+        $d = Join-Path $TestDrive 'del'
+        New-Item -ItemType Directory -Force -Path $d | Out-Null
+        1..3 | ForEach-Object { New-Item -ItemType File -Force -Path (Join-Path $d "B_part$_.rar") | Out-Null }
+        $removed = Remove-ArchiveSet -EntryArchive (Join-Path $d 'B_part1.rar')
+        $removed | Should -Be 3
+        @(Get-ChildItem -LiteralPath $d -File).Count | Should -Be 0
+    }
+
+    It 'moves every part into the destination subfolder' {
+        $d = Join-Path $TestDrive 'mov'
+        New-Item -ItemType Directory -Force -Path $d | Out-Null
+        1..2 | ForEach-Object { New-Item -ItemType File -Force -Path (Join-Path $d "C_part$_.rar") | Out-Null }
+        $moved = Move-ArchiveSet -EntryArchive (Join-Path $d 'C_part1.rar') -DestSubfolder '_Extracted'
+        $moved | Should -Be 2
+        @(Get-ChildItem -LiteralPath (Join-Path $d '_Extracted') -File).Count | Should -Be 2
+        @(Get-ChildItem -LiteralPath $d -File).Count | Should -Be 0
     }
 }
 

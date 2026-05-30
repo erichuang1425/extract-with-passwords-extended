@@ -78,6 +78,56 @@ function Write-Status {
     }
 }
 
+function Get-ProgressLine {
+    # Pure helper that builds the progress-line string (no I/O) so the timing
+    # logic is unit-testable. Shows elapsed time and a passwords/sec rate, and
+    # only adds a remaining-time estimate once the sample is large enough to be
+    # meaningful — extrapolating from one attempt produced a misleading
+    # "~1s left" that ignored the (much longer) extraction that follows.
+    param(
+        [int]$Current,
+        [int]$Total,
+        [int]$Width = 30,
+        [long]$ElapsedMs = 0,
+        [string]$EngineName = ""
+    )
+
+    if ($Total -le 0) { return "" }
+
+    $pct = [math]::Min(100, [math]::Floor(($Current / $Total) * 100))
+    $filled = [math]::Min($Width, [math]::Max(0, [math]::Floor(($Current / $Total) * $Width)))
+    $empty = $Width - $filled
+    $bar = ("=" * $filled) + ("-" * $empty)
+
+    $timeStr = ""
+    if ($ElapsedMs -gt 0 -and $Current -gt 0) {
+        $elapsedSec = $ElapsedMs / 1000.0
+        $timeStr = " {0} elapsed" -f (Format-ElapsedFromMs $ElapsedMs)
+
+        if ($Current -ge 2 -and $elapsedSec -gt 0) {
+            $timeStr += " ({0:N1}/s)" -f ($Current / $elapsedSec)
+        }
+
+        # Only show an ETA after enough samples (>=5) and enough wall time (>=1s).
+        if ($Current -ge 5 -and $ElapsedMs -ge 1000 -and $Current -lt $Total) {
+            $avgMs = $ElapsedMs / $Current
+            $remainSec = [math]::Ceiling(($avgMs * ($Total - $Current)) / 1000)
+            if ($remainSec -ge 60) {
+                $timeStr += " ~{0}m {1}s left" -f [math]::Floor($remainSec / 60), ($remainSec % 60)
+            } else {
+                $timeStr += " ~${remainSec}s left"
+            }
+        }
+    }
+
+    $engineStr = ""
+    if ($EngineName) {
+        $engineStr = " [engine: $EngineName]"
+    }
+
+    return "    [$bar] $pct% ($Current/$Total)$timeStr$engineStr    "
+}
+
 function Write-ProgressBar {
     param(
         [int]$Current,
@@ -88,29 +138,38 @@ function Write-ProgressBar {
     )
 
     if ($Total -le 0) { return }
-    $pct = [math]::Min(100, [math]::Floor(($Current / $Total) * 100))
-    $filled = [math]::Min($Width, [math]::Max(0, [math]::Floor(($Current / $Total) * $Width)))
-    $empty = $Width - $filled
-    $bar = ("=" * $filled) + ("-" * $empty)
 
-    $etaStr = ""
-    if ($ElapsedMs -gt 0 -and $Current -gt 0 -and $Current -lt $Total) {
-        $avgMs = $ElapsedMs / $Current
-        $remainMs = $avgMs * ($Total - $Current)
-        $remainSec = [math]::Ceiling($remainMs / 1000)
-        if ($remainSec -ge 60) {
-            $etaStr = " ~{0}m {1}s left" -f [math]::Floor($remainSec / 60), ($remainSec % 60)
-        } else {
-            $etaStr = " ~${remainSec}s left"
-        }
+    $line = Get-ProgressLine -Current $Current -Total $Total -Width $Width -ElapsedMs $ElapsedMs -EngineName $EngineName
+    Write-Host "`r$line" -NoNewline
+}
+
+function Read-OutputBehavior {
+    # Interactive chooser for how existing extracted folders are handled.
+    # Returns "replace" | "new" | "merge"; blank/invalid keeps $Current.
+    param([string]$Current = "replace")
+
+    $labels = @{
+        "replace" = "Overwrite existing folders"
+        "new"     = "Keep both (new _2/_3 folders)"
+        "merge"   = "Merge, skip duplicate files"
     }
+    $curLabel = if ($labels.ContainsKey($Current)) { $labels[$Current] } else { $Current }
 
-    $engineStr = ""
-    if ($EngineName) {
-        $engineStr = " [engine: $EngineName]"
+    Write-Host ""
+    Write-Status "How should existing extracted folders be handled?" "info"
+    Write-Host "  [1] " -ForegroundColor Cyan -NoNewline; Write-Host "Overwrite existing folder (replace)"
+    Write-Host "  [2] " -ForegroundColor Cyan -NoNewline; Write-Host "Keep both (create a new _2/_3 folder)"
+    Write-Host "  [3] " -ForegroundColor Cyan -NoNewline; Write-Host "Merge, skip duplicate files (keep existing)"
+    Write-Host "  Select (1-3, Enter = keep current: $curLabel): " -ForegroundColor Magenta -NoNewline
+    $choice = Read-Host
+    Write-Log "Output behavior prompt answer: $choice"
+
+    switch ($choice.Trim()) {
+        "1" { return "replace" }
+        "2" { return "new" }
+        "3" { return "merge" }
+        default { return $Current }
     }
-
-    Write-Host "`r    [$bar] $pct% ($Current/$Total)$etaStr$engineStr    " -NoNewline
 }
 
 function Format-FileSize {

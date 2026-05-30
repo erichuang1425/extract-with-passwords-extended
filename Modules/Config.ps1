@@ -51,6 +51,16 @@ $ExtractNestedArchives = $false
 $MaxNestedDepth = 1
 $DeleteNestedArchiveAfterExtract = $false
 
+# Prompt each run to choose how existing extracted folders are handled.
+$AskOutputBehavior = $true
+# What to do with the original source archives after a run:
+# "none" | "prompt" | "delete" (successful sets) | "sort" (into _Extracted/_Failed).
+$PostExtractionAction = "prompt"
+# Skip the confirmation prompt when deleting (used only with action "delete").
+$PostExtractionSilent = $false
+# Keep the system awake (no idle-sleep) while extraction is running.
+$PreventSleepDuringExtraction = $true
+
 $EncryptionCapableExtensions = @{
     '.zip' = $true; '.zipx' = $true; '.7z' = $true; '.rar' = $true
 }
@@ -98,6 +108,17 @@ function Test-ConfigSane {
         } else {
             Write-Host "[!] Config 'existingOutputBehavior'='$behavior' invalid (expected replace|merge|new); resetting to 'replace'." -ForegroundColor Yellow
             Set-Variable -Name "ExistingOutputBehavior" -Value "replace" -Scope Script
+        }
+    }
+
+    $postAction = Get-Variable -Name "PostExtractionAction" -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+    if ($postAction -notin @("none", "prompt", "delete", "sort")) {
+        $lc = ([string]$postAction).ToLowerInvariant()
+        if ($lc -in @("none", "prompt", "delete", "sort")) {
+            Set-Variable -Name "PostExtractionAction" -Value $lc -Scope Script
+        } else {
+            Write-Host "[!] Config 'postExtractionAction'='$postAction' invalid (expected none|prompt|delete|sort); resetting to 'prompt'." -ForegroundColor Yellow
+            Set-Variable -Name "PostExtractionAction" -Value "prompt" -Scope Script
         }
     }
 
@@ -158,6 +179,10 @@ function Read-Config {
             "extractNestedArchives" = "ExtractNestedArchives"
             "maxNestedDepth" = "MaxNestedDepth"
             "deleteNestedArchiveAfterExtract" = "DeleteNestedArchiveAfterExtract"
+            "askOutputBehavior" = "AskOutputBehavior"
+            "postExtractionAction" = "PostExtractionAction"
+            "postExtractionSilent" = "PostExtractionSilent"
+            "preventSleepDuringExtraction" = "PreventSleepDuringExtraction"
         }
 
         foreach ($jsonKey in $map.Keys) {
