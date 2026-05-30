@@ -99,3 +99,39 @@ Describe 'Test-EngineWorks (WinRAR GUI)' {
         Test-EngineWorks -EnginePath '' | Should -BeFalse
     }
 }
+
+Describe 'Get-EnginePlanForArchive WinRAR fallback' {
+    BeforeAll {
+        # Get-EnginePlanForArchive needs Test-IsRarLike (ArchiveUtils) and the
+        # engine-enable config switches.
+        . $ProductionModule['ArchiveUtils']
+        $script:UseSevenZip = $true
+        $script:UseWinRarFallback = $true
+        $script:UsePeaZipBundled7zFallback = $true
+
+        # Fake WinRAR install dir with both the console and GUI binaries.
+        $script:wrDir = Join-Path $TestDrive 'WinRAR'
+        New-Item -ItemType Directory -Force -Path $script:wrDir | Out-Null
+        $script:unrar = Join-Path $script:wrDir 'UnRAR.exe'
+        $script:winrarGui = Join-Path $script:wrDir 'WinRAR.exe'
+        New-Item -ItemType File -Force -Path $script:unrar | Out-Null
+        New-Item -ItemType File -Force -Path $script:winrarGui | Out-Null
+    }
+
+    It 'uses console UnRAR for a RAR archive and does not pull in the GUI' {
+        $paths = @((Get-EnginePlanForArchive -Archive 'a.rar' -SevenZip $null -PeaZip7z $null -WinRar $script:unrar) | ForEach-Object { $_.Path })
+        $paths | Should -Contain $script:unrar
+        $paths | Should -Not -Contain $script:winrarGui
+    }
+
+    It 'falls back to the sibling WinRAR.exe for a ZIP when no 7-Zip/PeaZip is available' {
+        $paths = @((Get-EnginePlanForArchive -Archive 'a.zip' -SevenZip $null -PeaZip7z $null -WinRar $script:unrar) | ForEach-Object { $_.Path })
+        $paths | Should -Contain $script:winrarGui
+    }
+
+    It 'does not add WinRAR.exe for a ZIP when 7-Zip is available' {
+        $paths = @((Get-EnginePlanForArchive -Archive 'a.zip' -SevenZip 'C:/7-Zip/7z.exe' -PeaZip7z $null -WinRar $script:unrar) | ForEach-Object { $_.Path })
+        $paths | Should -Not -Contain $script:winrarGui
+        $paths | Should -Contain 'C:/7-Zip/7z.exe'
+    }
+}

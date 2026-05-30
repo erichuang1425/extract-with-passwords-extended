@@ -378,6 +378,17 @@ function Get-EnginePlanForArchive {
                 $plan += @{ Name = $winRarName; Path = $WinRar }
                 $seen[$WinRar] = $true
             }
+        } elseif (-not ($UseSevenZip -and $SevenZip) -and -not ($UsePeaZipBundled7zFallback -and $PeaZip7z)) {
+            # Non-RAR archive whose resolved RAR engine is console-only
+            # (UnRAR/Rar) and no universal 7-Zip/PeaZip engine is available.
+            # Preferring the console binary must not lose WinRAR's ability to
+            # handle ZIP/7z/etc., so fall back to a sibling WinRAR.exe (which
+            # runs minimized via -ibck during extraction).
+            $guiPath = Join-Path (Split-Path $WinRar -Parent) "WinRAR.exe"
+            if ((Test-Path -LiteralPath $guiPath) -and -not $seen[$guiPath]) {
+                $plan += @{ Name = "WinRAR"; Path = $guiPath }
+                $seen[$guiPath] = $true
+            }
         }
     }
 
