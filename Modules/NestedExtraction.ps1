@@ -88,14 +88,13 @@ function Invoke-NestedExtractionPass {
             $isEncryptable = Test-IsEncryptionCapable $archive
 
             # Password order: try the last successful password first, then the rest.
-            # Non-encryption-capable formats only need a single no-password attempt.
+            # This is what lets a multilayer archive use a *different* password at
+            # each layer — the promoted guess fails and the remaining candidates are
+            # tried until the layer's own password is found (then it becomes the new
+            # preferred guess). Non-encryption-capable formats only need a single
+            # no-password attempt.
             if ($isEncryptable) {
-                $tryList = @($Passwords)
-                if ($lastWin) {
-                    $reordered = @($lastWin)
-                    foreach ($pw in $Passwords) { if ($pw -ne $lastWin) { $reordered += $pw } }
-                    $tryList = $reordered
-                }
+                $tryList = @(Get-PasswordTryOrder -Passwords $Passwords -PreferredFirst $lastWin)
             } else {
                 $tryList = @("")
             }
@@ -148,11 +147,19 @@ function Invoke-NestedExtractionPass {
                     }
                 }
 
-                # Recurse into the freshly extracted output unless we are at the depth limit.
+                # Recurse into the freshly extracted output unless we are at the
+                # depth limit. Descend further only while the layer still holds a
+                # compressed file AND has not yet produced an executable payload —
+                # an .exe (etc.) is treated as the intended final output, so we
+                # stop peeling once one appears.
                 $childKey = Get-NormalizedPathKey $outputDir
                 if (($depth + 1) -le $MaxDepth -and $childKey -and -not $visitedFolders.ContainsKey($childKey)) {
-                    $visitedFolders[$childKey] = $true
-                    $queue.Enqueue(@{ Folder = $outputDir; Depth = $depth + 1 })
+                    if (Test-NestedLayerShouldRecurse -Folder $outputDir) {
+                        $visitedFolders[$childKey] = $true
+                        $queue.Enqueue(@{ Folder = $outputDir; Depth = $depth + 1 })
+                    } else {
+                        Write-Log "Nested recursion stops at $outputDir (executable payload present or no further archives)."
+                    }
                 }
 
                 $results.Add([PSCustomObject]@{

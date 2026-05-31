@@ -65,6 +65,12 @@ $EncryptionCapableExtensions = @{
     '.zip' = $true; '.zipx' = $true; '.7z' = $true; '.rar' = $true
 }
 
+# File extensions treated as an executable "payload". When the nested
+# (multilayer) extraction pass uncovers one of these inside a freshly-extracted
+# layer, it stops descending further: the executable is taken to be the intended
+# final output, so there is no need to keep peeling layers underneath it.
+$ExecutablePayloadExtensions = @('.exe', '.msi', '.com', '.scr')
+
 $lastCopiedPassword = $null
 $lastSuccessfulPassword = $null
 
