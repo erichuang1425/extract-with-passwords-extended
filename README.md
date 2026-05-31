@@ -206,6 +206,8 @@ Split variants (`.zip.001`, `.7z.001`, `.rar.001`, `.part01.rar`) are also suppo
 | `.cab` | Yes | No | No |
 | `.iso` / `.wim` / `.img` / `.dmg` | Yes | No | No |
 
+Compound tar archives (`.tar.zst`, `.tar.gz`, `.tgz`, …) are two-layer: 7-Zip/WinRAR peel the outer compression to an intermediate `.tar`, which the script then extracts **in place** automatically (independent of the nested-extraction setting), so the output folder holds the real contents — not a leftover `.tar`, and with no redundant `name\name` subfolder.
+
 ## Engine Priority
 
 Engines are tried in this order for each archive:
@@ -248,7 +250,7 @@ Set `maxParallelArchives` > 1 to process multiple archives concurrently using Po
 - **Password file is plaintext**: The `passwords.txt` file is stored unencrypted in your Documents folder.
 - **Clipboard exposure**: Even with auto-clear, the matched password is briefly in the clipboard between discovery and script exit.
 - **No archive creation**: This tool is extraction-only.
-- **Nested extraction is bounded and single-threaded**: When `extractNestedArchives` is enabled, the nested post-pass runs sequentially (regardless of `maxParallelArchives`), is capped by `maxNestedDepth`, and reuses the parent run's password list and cache. A visited-path guard prevents runaway recursion.
+- **Nested extraction is bounded and single-threaded**: When `extractNestedArchives` is enabled, the nested post-pass runs sequentially (regardless of `maxParallelArchives`), is capped by `maxNestedDepth`, and reuses the parent run's password list and cache. A visited-path guard prevents runaway recursion. Each layer is tried with the previously-successful password first and then the rest, so layers protected by **different** passwords are handled. A layer is scanned for archives only while it has not yet produced an executable payload (`.exe`/`.msi`/`.com`/`.scr`) — an executable is treated as the intended final output, so the pass stops descending at the first layer that yields one (this check applies to the initial output folders as well as every deeper layer).
 - **Toast notifications**: Require PowerShell 5.0+ and Windows 10+. Silently skipped if unavailable.
 
 ## Troubleshooting
