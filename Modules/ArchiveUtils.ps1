@@ -149,6 +149,71 @@ function Test-IsEncryptionCapable {
     return $false
 }
 
+function Test-IsCompoundTarArchive {
+    # A "compound tar" is a tarball wrapped in a single outer compression layer
+    # (foo.tar.zst, foo.tar.gz, foo.tgz, ...). 7-Zip and WinRAR peel these in two
+    # steps: extracting the archive only removes the outer layer, leaving an
+    # intermediate .tar behind that must be extracted again to reach the real
+    # contents. Callers use this to drive that automatic second step.
+    param([string]$Path)
+
+    $n = [IO.Path]::GetFileName($Path)
+
+    return (
+        $n -imatch "\.tar\.(zst|gz|bz2|xz|lzma|lz4|br)$" -or
+        $n -imatch "\.(tgz|tbz2|txz|tzst)$"
+    )
+}
+
+function Test-DirectoryHasExecutable {
+    # True when the directory tree contains at least one executable payload file
+    # (see $ExecutablePayloadExtensions). Used by the nested pass to decide that a
+    # layer has yielded its final output and recursion should stop.
+    param([string]$Dir)
+
+    if ([string]::IsNullOrWhiteSpace($Dir) -or !(Test-Path -LiteralPath $Dir)) {
+        return $false
+    }
+
+    $exeExts = if ($null -ne $ExecutablePayloadExtensions) { $ExecutablePayloadExtensions } else { @('.exe') }
+
+    try {
+        foreach ($file in (Get-ChildItem -LiteralPath $Dir -Recurse -File -Force -ErrorAction SilentlyContinue)) {
+            if ($exeExts -contains $file.Extension.ToLowerInvariant()) {
+                return $true
+            }
+        }
+    } catch {
+        Write-Log "Could not scan $Dir for executables: $($_.Exception.Message)" "WARN"
+    }
+
+    return $false
+}
+
+function Test-DirectoryHasCompressedFile {
+    # True when the directory tree still contains at least one extractable entry
+    # archive (the inverse signal to Test-DirectoryHasExecutable). Reuses the same
+    # entry-archive detection as the nested pass so the two stay in lockstep.
+    param([string]$Dir)
+
+    return (@(Find-NestedArchives -Root $Dir).Count -gt 0)
+}
+
+function Test-NestedLayerShouldRecurse {
+    # Gate for the multilayer (deeper) extraction pass: only descend into a
+    # freshly-extracted layer when it still holds a compressed file to peel AND
+    # does not yet contain an executable payload. An .exe (etc.) is treated as the
+    # intended final output, so its presence halts further descent even if more
+    # archives sit alongside it.
+    param([string]$Folder)
+
+    if (Test-DirectoryHasExecutable -Dir $Folder) {
+        return $false
+    }
+
+    return (Test-DirectoryHasCompressedFile -Dir $Folder)
+}
+
 function Test-IsFirstVolumeOrNormalArchive {
     param([string]$Path)
 

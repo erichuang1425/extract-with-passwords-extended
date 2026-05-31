@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **`.tar.zst` (and other compound tar archives) now fully extract in one pass.**
+  7-Zip and WinRAR peel only the outer compression layer of a `.tar.zst` /
+  `.tar.gz` / `.tgz` / … archive, leaving an intermediate `.tar` behind. That
+  leftover tarball is now extracted automatically *in place* — regardless of the
+  `extractNestedArchives` setting — so the output folder holds the real contents
+  instead of a stray `.tar`. The contents land directly in the cleanly-named
+  output folder (no redundant `name\name` nesting).
 - **Multi-part archives with non-dot separators are no longer extracted multiple
   times.** Sets named `Name_part1.rar`, `Name_part2.rar`, … (underscore, hyphen,
   or space before `part`, not just the WinRAR-default dot) were each treated as a
@@ -28,6 +35,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Post-extraction handling of the original archives** (`postExtractionAction`):
   leave them, delete the successfully-extracted ones, or sort them into
   `_Extracted` / `_Failed` folders — all volume parts are handled together.
+- **Smarter multilayer nesting that stops at the payload.** The nested
+  (recursive) extraction pass already tries the previously-successful password
+  first and then the rest, so each layer of a nested archive can use a *different*
+  password. It now descends into a freshly-extracted layer only while that layer
+  still contains a compressed file to peel **and** has not yet produced an
+  executable payload (`.exe`/`.msi`/`.com`/`.scr`) — once an executable appears it
+  is treated as the intended final output and recursion stops there.
 - **Keep the system awake during long runs** (`preventSleepDuringExtraction`): the
   machine no longer idle-sleeps mid-extraction (the display may still sleep).
 - A clearer progress indicator: it now shows elapsed time and a passwords/sec

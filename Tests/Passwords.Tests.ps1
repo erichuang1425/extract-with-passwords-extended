@@ -120,6 +120,34 @@ Describe 'Save-PasswordToCache / Get-CachedPasswords round-trip' {
     }
 }
 
+Describe 'Get-PasswordTryOrder' {
+    It 'returns the list unchanged when there is no preferred password' {
+        InModuleScope PwUnderTest {
+            (Get-PasswordTryOrder -Passwords @('a', 'b', 'c') -PreferredFirst $null) -join ',' | Should -Be 'a,b,c'
+        }
+    }
+
+    It 'returns the list unchanged when the preferred password is the empty slot' {
+        InModuleScope PwUnderTest {
+            (Get-PasswordTryOrder -Passwords @('a', 'b', 'c') -PreferredFirst '') -join ',' | Should -Be 'a,b,c'
+        }
+    }
+
+    It 'promotes the last successful password to the front without duplicating it' {
+        InModuleScope PwUnderTest {
+            (Get-PasswordTryOrder -Passwords @('a', 'b', 'c') -PreferredFirst 'c') -join ',' | Should -Be 'c,a,b'
+        }
+    }
+
+    It 'tries a preferred password first even when it is not in the list (per-layer password)' {
+        InModuleScope PwUnderTest {
+            # A multilayer archive can use a different password at each layer; the
+            # previous layer's winning password is still tried first.
+            (Get-PasswordTryOrder -Passwords @('a', 'b') -PreferredFirst 'z') -join ',' | Should -Be 'z,a,b'
+        }
+    }
+}
+
 Describe 'Get-Passwords' {
     It 'loads passwords, skipping blanks and comments, and de-duplicates' {
         InModuleScope PwUnderTest {

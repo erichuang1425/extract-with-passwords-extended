@@ -263,6 +263,84 @@ Describe 'Resolve-OutputDir BehaviorOverride' {
     }
 }
 
+Describe 'Test-IsCompoundTarArchive' {
+    It 'matches compound tar formats (two-layer)' -ForEach @(
+        @{ Name = 'a.tar.zst' }, @{ Name = 'a.tar.gz' }, @{ Name = 'a.tar.bz2' },
+        @{ Name = 'a.tar.xz' }, @{ Name = 'a.tgz' }, @{ Name = 'a.tbz2' },
+        @{ Name = 'a.txz' }, @{ Name = 'a.tzst' }
+    ) {
+        Test-IsCompoundTarArchive $Name | Should -BeTrue
+    }
+
+    It 'does not match a plain tar or single-layer archives' -ForEach @(
+        @{ Name = 'a.tar' }, @{ Name = 'a.zip' }, @{ Name = 'a.7z' }, @{ Name = 'a.zst' }
+    ) {
+        Test-IsCompoundTarArchive $Name | Should -BeFalse
+    }
+}
+
+Describe 'Test-DirectoryHasExecutable' {
+    It 'detects an .exe anywhere in the tree' {
+        $d = Join-Path $TestDrive 'exe-tree'
+        $sub = Join-Path $d 'sub'
+        New-Item -ItemType Directory -Force -Path $sub | Out-Null
+        New-Item -ItemType File -Force -Path (Join-Path $sub 'payload.exe') | Out-Null
+        Test-DirectoryHasExecutable -Dir $d | Should -BeTrue
+    }
+
+    It 'returns false when no executable payload is present' {
+        $d = Join-Path $TestDrive 'no-exe'
+        New-Item -ItemType Directory -Force -Path $d | Out-Null
+        New-Item -ItemType File -Force -Path (Join-Path $d 'readme.txt') | Out-Null
+        New-Item -ItemType File -Force -Path (Join-Path $d 'inner.7z')   | Out-Null
+        Test-DirectoryHasExecutable -Dir $d | Should -BeFalse
+    }
+
+    It 'returns false for a missing directory' {
+        Test-DirectoryHasExecutable -Dir (Join-Path $TestDrive 'does-not-exist') | Should -BeFalse
+    }
+}
+
+Describe 'Test-DirectoryHasCompressedFile' {
+    It 'detects a nested entry archive' {
+        $d = Join-Path $TestDrive 'has-arc'
+        New-Item -ItemType Directory -Force -Path $d | Out-Null
+        New-Item -ItemType File -Force -Path (Join-Path $d 'inner.zip') | Out-Null
+        Test-DirectoryHasCompressedFile -Dir $d | Should -BeTrue
+    }
+
+    It 'returns false when only plain files are present' {
+        $d = Join-Path $TestDrive 'no-arc'
+        New-Item -ItemType Directory -Force -Path $d | Out-Null
+        New-Item -ItemType File -Force -Path (Join-Path $d 'data.bin') | Out-Null
+        Test-DirectoryHasCompressedFile -Dir $d | Should -BeFalse
+    }
+}
+
+Describe 'Test-NestedLayerShouldRecurse' {
+    It 'recurses when a layer has a compressed file and no executable' {
+        $d = Join-Path $TestDrive 'recurse-yes'
+        New-Item -ItemType Directory -Force -Path $d | Out-Null
+        New-Item -ItemType File -Force -Path (Join-Path $d 'next.7z') | Out-Null
+        Test-NestedLayerShouldRecurse -Folder $d | Should -BeTrue
+    }
+
+    It 'stops when an executable payload is present, even alongside an archive' {
+        $d = Join-Path $TestDrive 'recurse-exe'
+        New-Item -ItemType Directory -Force -Path $d | Out-Null
+        New-Item -ItemType File -Force -Path (Join-Path $d 'next.7z')   | Out-Null
+        New-Item -ItemType File -Force -Path (Join-Path $d 'setup.exe') | Out-Null
+        Test-NestedLayerShouldRecurse -Folder $d | Should -BeFalse
+    }
+
+    It 'stops when there is no further compressed file to peel' {
+        $d = Join-Path $TestDrive 'recurse-none'
+        New-Item -ItemType Directory -Force -Path $d | Out-Null
+        New-Item -ItemType File -Force -Path (Join-Path $d 'document.pdf') | Out-Null
+        Test-NestedLayerShouldRecurse -Folder $d | Should -BeFalse
+    }
+}
+
 Describe 'Sanitize-FileName' {
     It 'replaces Windows-invalid characters with underscores' {
         Sanitize-FileName 'a:b*c' | Should -Be 'a_b_c'

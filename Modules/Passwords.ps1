@@ -168,6 +168,35 @@ function Save-PasswordToCache {
     }
 }
 
+function Get-PasswordTryOrder {
+    # Order the candidate passwords so the one most likely to work is tried first.
+    # Archives processed back-to-back — and successive layers of a multilayer
+    # archive — frequently share a password, so the last password that succeeded
+    # is promoted to the front. When layers use *different* passwords this still
+    # works: the promoted guess simply fails and the remaining candidates are
+    # tried in order. Pure and side-effect free so it is unit-testable.
+    param(
+        [string[]]$Passwords,
+        [string]$PreferredFirst
+    )
+
+    $all = @($Passwords)
+
+    # A successful password is never the empty (no-password) sentinel, so an
+    # empty/absent preference means "no reordering".
+    if ([string]::IsNullOrEmpty($PreferredFirst)) {
+        return $all
+    }
+
+    $ordered = New-Object System.Collections.Generic.List[string]
+    [void]$ordered.Add($PreferredFirst)
+    foreach ($pw in $all) {
+        if ($pw -ne $PreferredFirst) { [void]$ordered.Add($pw) }
+    }
+
+    return @($ordered.ToArray())
+}
+
 function Get-Passwords {
     $seen = @{}
     $clean = New-Object System.Collections.Generic.List[string]
