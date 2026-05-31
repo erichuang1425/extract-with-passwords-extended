@@ -55,6 +55,18 @@ function Invoke-NestedExtractionPass {
         $nested = @(Find-NestedArchives -Root $folder)
         if ($nested.Count -eq 0) { continue }
 
+        # Stop at the payload layer: if this layer already contains an executable
+        # payload (.exe/.msi/...), treat it as the intended final output and do not
+        # extract any archive sitting alongside it. Applied here — before scanning
+        # a dequeued folder — it gates the seed (main output) folders *and* every
+        # deeper layer alike, so the first layer that yields an executable ends the
+        # descent.
+        if (Test-DirectoryHasExecutable -Dir $folder) {
+            Write-Status "Reached an executable payload; skipping nested archives in this layer." "dim"
+            Write-Log "Nested scan skipped for $folder (executable payload present)."
+            continue
+        }
+
         foreach ($archive in $nested) {
             $archiveKey = Get-NormalizedPathKey $archive
             if ($archiveKey -and $visitedArchives.ContainsKey($archiveKey)) { continue }
@@ -88,14 +100,13 @@ function Invoke-NestedExtractionPass {
             $isEncryptable = Test-IsEncryptionCapable $archive
 
             # Password order: try the last successful password first, then the rest.
-            # Non-encryption-capable formats only need a single no-password attempt.
+            # This is what lets a multilayer archive use a *different* password at
+            # each layer — the promoted guess fails and the remaining candidates are
+            # tried until the layer's own password is found (then it becomes the new
+            # preferred guess). Non-encryption-capable formats only need a single
+            # no-password attempt.
             if ($isEncryptable) {
-                $tryList = @($Passwords)
-                if ($lastWin) {
-                    $reordered = @($lastWin)
-                    foreach ($pw in $Passwords) { if ($pw -ne $lastWin) { $reordered += $pw } }
-                    $tryList = $reordered
-                }
+                $tryList = @(Get-PasswordTryOrder -Passwords $Passwords -PreferredFirst $lastWin)
             } else {
                 $tryList = @("")
             }
@@ -148,7 +159,10 @@ function Invoke-NestedExtractionPass {
                     }
                 }
 
-                # Recurse into the freshly extracted output unless we are at the depth limit.
+                # Queue the freshly extracted output for the next layer (unless we
+                # are at the depth limit). The executable-payload gate at the top
+                # of the loop decides whether that layer is actually scanned, so a
+                # layer that turns out to hold the payload is skipped when dequeued.
                 $childKey = Get-NormalizedPathKey $outputDir
                 if (($depth + 1) -le $MaxDepth -and $childKey -and -not $visitedFolders.ContainsKey($childKey)) {
                     $visitedFolders[$childKey] = $true

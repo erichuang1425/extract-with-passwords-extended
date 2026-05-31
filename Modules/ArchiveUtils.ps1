@@ -149,6 +149,67 @@ function Test-IsEncryptionCapable {
     return $false
 }
 
+function Test-IsCompoundTarArchive {
+    # A "compound tar" is a tarball wrapped in a single outer compression layer
+    # (foo.tar.zst, foo.tar.gz, foo.tgz, ...). 7-Zip and WinRAR peel these in two
+    # steps: extracting the archive only removes the outer layer, leaving an
+    # intermediate .tar behind that must be extracted again to reach the real
+    # contents. Callers use this to drive that automatic second step.
+    param([string]$Path)
+
+    $n = [IO.Path]::GetFileName($Path)
+
+    return (
+        $n -imatch "\.tar\.(zst|gz|bz2|xz|lzma|lz4|br)$" -or
+        $n -imatch "\.(tgz|tbz2|txz|tzst)$"
+    )
+}
+
+function Get-ExpectedTarResidueName {
+    # The file name 7-Zip/WinRAR leave behind after peeling the outer compression
+    # layer of a compound tar archive: foo.tar.zst / foo.tgz -> foo.tar. Targeting
+    # this deterministic name lets the residue step pick *our* tarball even when
+    # the output folder is shared and holds unrelated .tar files. Returns $null for
+    # anything that is not a compound tar.
+    param([string]$Path)
+
+    $n = [IO.Path]::GetFileName($Path)
+
+    if ($n -imatch "^(?<base>.+\.tar)\.(zst|gz|bz2|xz|lzma|lz4|br)$") {
+        return $Matches["base"]
+    }
+    if ($n -imatch "^(?<base>.+)\.(tgz|tbz2|txz|tzst)$") {
+        return "$($Matches['base']).tar"
+    }
+
+    return $null
+}
+
+function Test-DirectoryHasExecutable {
+    # True when the directory tree contains at least one executable payload file
+    # (see $ExecutablePayloadExtensions). Used by the nested pass to decide that a
+    # layer has yielded its final output and recursion should stop.
+    param([string]$Dir)
+
+    if ([string]::IsNullOrWhiteSpace($Dir) -or !(Test-Path -LiteralPath $Dir)) {
+        return $false
+    }
+
+    $exeExts = if ($null -ne $ExecutablePayloadExtensions) { $ExecutablePayloadExtensions } else { @('.exe') }
+
+    try {
+        foreach ($file in (Get-ChildItem -LiteralPath $Dir -Recurse -File -Force -ErrorAction SilentlyContinue)) {
+            if ($exeExts -contains $file.Extension.ToLowerInvariant()) {
+                return $true
+            }
+        }
+    } catch {
+        Write-Log "Could not scan $Dir for executables: $($_.Exception.Message)" "WARN"
+    }
+
+    return $false
+}
+
 function Test-IsFirstVolumeOrNormalArchive {
     param([string]$Path)
 

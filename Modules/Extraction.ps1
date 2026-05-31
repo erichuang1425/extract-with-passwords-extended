@@ -292,6 +292,84 @@ function Extract-WithWinRar {
     return $false
 }
 
+function Expand-CompoundTarResidue {
+    # 7-Zip and WinRAR only peel the outer compression layer of a compound tar
+    # archive (foo.tar.zst -> foo.tar), leaving the intermediate tarball in the
+    # output folder. Extract that tarball *in place* so its contents land directly
+    # in $OutputDir (rather than a redundant foo\foo subfolder), then delete it.
+    #
+    # Returns $true when the archive is fully extracted: the residue tarball was
+    # expanded, or there was nothing recognizable to expand (the engine already
+    # produced the final contents). Returns $false only when a residue tarball was
+    # located but could not be extracted, so the caller can report the compound
+    # archive as not-fully-extracted instead of a false success.
+    param(
+        [string]$EngineName,
+        [string]$EnginePath,
+        [string]$OutputDir,
+        [string]$SourceArchive,
+        [int]$Timeout = 0
+    )
+
+    if (-not (Test-Path -LiteralPath $OutputDir)) { return $true }
+
+    # Prefer the deterministic name the engine derives from the source archive
+    # (foo.tar.zst -> foo.tar): this targets *our* tarball even when $OutputDir is
+    # shared and already holds unrelated .tar files. Fall back to a lone top-level
+    # .tar only when that exact name is absent (engine naming variance).
+    $tar = $null
+    $expected = Get-ExpectedTarResidueName $SourceArchive
+    if ($expected) {
+        $candidate = Join-Path $OutputDir $expected
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $tar = $candidate }
+    }
+
+    if (-not $tar) {
+        # -Filter "*.tar" can over-match via 8.3 short names (e.g. data.tarball),
+        # so narrow to an exact extension match and only act on an unambiguous
+        # single tarball.
+        $tarFiles = @(Get-ChildItem -LiteralPath $OutputDir -Filter "*.tar" -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.Extension -ieq ".tar" })
+        if ($tarFiles.Count -eq 1) {
+            $tar = $tarFiles[0].FullName
+        } elseif ($tarFiles.Count -gt 1) {
+            Write-Log "Multiple .tar files in $OutputDir and none match the expected residue name; not auto-expanding." "WARN"
+        }
+    }
+
+    # Nothing recognizable to expand: treat the outer extraction as complete.
+    if (-not $tar) { return $true }
+
+    Write-Log "Compound-tar residue detected; extracting in place: $tar"
+
+    $ok = $false
+    if ($EngineName -eq "7-Zip" -or $EngineName -eq "PeaZip bundled 7z") {
+        $ok = Extract-With7z -SevenZip $EnginePath -Archive $tar -Password "" -OutputDir $OutputDir -OmitPasswordIfEmpty $true -Timeout $Timeout
+    } elseif ($EngineName -eq "WinRAR") {
+        # The console UnRAR/Rar binaries cannot read a plain .tar; only the
+        # universal WinRAR.exe can. (A real .tar.zst would never have been opened
+        # by UnRAR/Rar in the first place, so they never reach this path.)
+        $ok = Extract-WithWinRar -RarExe $EnginePath -Archive $tar -Password "" -OutputDir $OutputDir -Timeout $Timeout
+    } else {
+        Write-Log "Engine $EngineName cannot extract the intermediate tarball; leaving $tar in place." "WARN"
+        return $false
+    }
+
+    if (-not $ok) {
+        Write-Log "Failed to extract intermediate tarball $tar; leaving it in place." "WARN"
+        return $false
+    }
+
+    try {
+        Remove-Item -LiteralPath $tar -Force -ErrorAction Stop
+        Write-Log "Removed intermediate tarball after extraction: $tar"
+    } catch {
+        Write-Log "Could not remove intermediate tarball $tar : $($_.Exception.Message)" "WARN"
+    }
+
+    return $true
+}
+
 function Try-EnginePassword {
     param(
         [string]$EngineName,
@@ -341,6 +419,19 @@ function Try-EnginePassword {
     }
 
     if ($extractOk) {
+        # Compound tar formats (foo.tar.zst, foo.tgz, ...) come out in two layers:
+        # the engine peels the outer compression to an intermediate .tar, which we
+        # now extract in place so the user gets the real contents (and no redundant
+        # foo\foo nesting) regardless of the nested-extraction setting. If that
+        # intermediate tarball is located but cannot be expanded, the archive is
+        # only partially extracted: report failure so callers don't treat the
+        # source as fully done (and delete/sort it), while leaving the recovered
+        # outer layer in place rather than clearing it.
+        if ((Test-IsCompoundTarArchive $Archive) -and
+            -not (Expand-CompoundTarResidue -EngineName $EngineName -EnginePath $EnginePath -OutputDir $OutputDir -SourceArchive $Archive -Timeout $Timeout)) {
+            Write-Log "Compound-tar archive only partially extracted (intermediate tarball not expanded): $Archive" "WARN"
+            return $false
+        }
         return $true
     }
 
