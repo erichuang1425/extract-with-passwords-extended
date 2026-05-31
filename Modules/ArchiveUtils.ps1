@@ -165,6 +165,26 @@ function Test-IsCompoundTarArchive {
     )
 }
 
+function Get-ExpectedTarResidueName {
+    # The file name 7-Zip/WinRAR leave behind after peeling the outer compression
+    # layer of a compound tar archive: foo.tar.zst / foo.tgz -> foo.tar. Targeting
+    # this deterministic name lets the residue step pick *our* tarball even when
+    # the output folder is shared and holds unrelated .tar files. Returns $null for
+    # anything that is not a compound tar.
+    param([string]$Path)
+
+    $n = [IO.Path]::GetFileName($Path)
+
+    if ($n -imatch "^(?<base>.+\.tar)\.(zst|gz|bz2|xz|lzma|lz4|br)$") {
+        return $Matches["base"]
+    }
+    if ($n -imatch "^(?<base>.+)\.(tgz|tbz2|txz|tzst)$") {
+        return "$($Matches['base']).tar"
+    }
+
+    return $null
+}
+
 function Test-DirectoryHasExecutable {
     # True when the directory tree contains at least one executable payload file
     # (see $ExecutablePayloadExtensions). Used by the nested pass to decide that a
@@ -188,30 +208,6 @@ function Test-DirectoryHasExecutable {
     }
 
     return $false
-}
-
-function Test-DirectoryHasCompressedFile {
-    # True when the directory tree still contains at least one extractable entry
-    # archive (the inverse signal to Test-DirectoryHasExecutable). Reuses the same
-    # entry-archive detection as the nested pass so the two stay in lockstep.
-    param([string]$Dir)
-
-    return (@(Find-NestedArchives -Root $Dir).Count -gt 0)
-}
-
-function Test-NestedLayerShouldRecurse {
-    # Gate for the multilayer (deeper) extraction pass: only descend into a
-    # freshly-extracted layer when it still holds a compressed file to peel AND
-    # does not yet contain an executable payload. An .exe (etc.) is treated as the
-    # intended final output, so its presence halts further descent even if more
-    # archives sit alongside it.
-    param([string]$Folder)
-
-    if (Test-DirectoryHasExecutable -Dir $Folder) {
-        return $false
-    }
-
-    return (Test-DirectoryHasCompressedFile -Dir $Folder)
 }
 
 function Test-IsFirstVolumeOrNormalArchive {

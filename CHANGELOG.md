@@ -38,10 +38,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Smarter multilayer nesting that stops at the payload.** The nested
   (recursive) extraction pass already tries the previously-successful password
   first and then the rest, so each layer of a nested archive can use a *different*
-  password. It now descends into a freshly-extracted layer only while that layer
-  still contains a compressed file to peel **and** has not yet produced an
-  executable payload (`.exe`/`.msi`/`.com`/`.scr`) — once an executable appears it
-  is treated as the intended final output and recursion stops there.
+  password. A layer is now scanned for archives only while it has not yet produced
+  an executable payload (`.exe`/`.msi`/`.com`/`.scr`) — once an executable appears
+  it is treated as the intended final output and the pass stops descending there.
+  This check is applied to the initial output folders as well as every deeper
+  layer, so the very first layer that yields an executable ends the descent.
 - **Keep the system awake during long runs** (`preventSleepDuringExtraction`): the
   machine no longer idle-sleeps mid-extraction (the display may still sleep).
 - A clearer progress indicator: it now shows elapsed time and a passwords/sec

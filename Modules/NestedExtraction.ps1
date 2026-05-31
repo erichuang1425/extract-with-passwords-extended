@@ -55,6 +55,18 @@ function Invoke-NestedExtractionPass {
         $nested = @(Find-NestedArchives -Root $folder)
         if ($nested.Count -eq 0) { continue }
 
+        # Stop at the payload layer: if this layer already contains an executable
+        # payload (.exe/.msi/...), treat it as the intended final output and do not
+        # extract any archive sitting alongside it. Applied here — before scanning
+        # a dequeued folder — it gates the seed (main output) folders *and* every
+        # deeper layer alike, so the first layer that yields an executable ends the
+        # descent.
+        if (Test-DirectoryHasExecutable -Dir $folder) {
+            Write-Status "Reached an executable payload; skipping nested archives in this layer." "dim"
+            Write-Log "Nested scan skipped for $folder (executable payload present)."
+            continue
+        }
+
         foreach ($archive in $nested) {
             $archiveKey = Get-NormalizedPathKey $archive
             if ($archiveKey -and $visitedArchives.ContainsKey($archiveKey)) { continue }
@@ -147,19 +159,14 @@ function Invoke-NestedExtractionPass {
                     }
                 }
 
-                # Recurse into the freshly extracted output unless we are at the
-                # depth limit. Descend further only while the layer still holds a
-                # compressed file AND has not yet produced an executable payload —
-                # an .exe (etc.) is treated as the intended final output, so we
-                # stop peeling once one appears.
+                # Queue the freshly extracted output for the next layer (unless we
+                # are at the depth limit). The executable-payload gate at the top
+                # of the loop decides whether that layer is actually scanned, so a
+                # layer that turns out to hold the payload is skipped when dequeued.
                 $childKey = Get-NormalizedPathKey $outputDir
                 if (($depth + 1) -le $MaxDepth -and $childKey -and -not $visitedFolders.ContainsKey($childKey)) {
-                    if (Test-NestedLayerShouldRecurse -Folder $outputDir) {
-                        $visitedFolders[$childKey] = $true
-                        $queue.Enqueue(@{ Folder = $outputDir; Depth = $depth + 1 })
-                    } else {
-                        Write-Log "Nested recursion stops at $outputDir (executable payload present or no further archives)."
-                    }
+                    $visitedFolders[$childKey] = $true
+                    $queue.Enqueue(@{ Folder = $outputDir; Depth = $depth + 1 })
                 }
 
                 $results.Add([PSCustomObject]@{
