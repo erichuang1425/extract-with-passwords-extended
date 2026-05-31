@@ -279,6 +279,27 @@ Describe 'Test-IsCompoundTarArchive' {
     }
 }
 
+Describe 'Get-ExpectedTarResidueName' {
+    It 'derives the intermediate tarball name from a compound tar archive' -ForEach @(
+        @{ Name = 'foo.tar.zst';     Expected = 'foo.tar' }
+        @{ Name = 'foo.tar.gz';      Expected = 'foo.tar' }
+        @{ Name = 'foo.tar.bz2';     Expected = 'foo.tar' }
+        @{ Name = 'data.set.tar.xz'; Expected = 'data.set.tar' }
+        @{ Name = 'foo.tgz';         Expected = 'foo.tar' }
+        @{ Name = 'foo.tbz2';        Expected = 'foo.tar' }
+        @{ Name = 'foo.txz';         Expected = 'foo.tar' }
+        @{ Name = 'foo.tzst';        Expected = 'foo.tar' }
+    ) {
+        Get-ExpectedTarResidueName $Name | Should -Be $Expected
+    }
+
+    It 'returns nothing for non-compound-tar names' -ForEach @(
+        @{ Name = 'foo.tar' }, @{ Name = 'foo.zip' }, @{ Name = 'foo.7z' }, @{ Name = 'foo.zst' }
+    ) {
+        Get-ExpectedTarResidueName $Name | Should -BeNullOrEmpty
+    }
+}
+
 Describe 'Test-DirectoryHasExecutable' {
     It 'detects an .exe anywhere in the tree' {
         $d = Join-Path $TestDrive 'exe-tree'
@@ -299,45 +320,13 @@ Describe 'Test-DirectoryHasExecutable' {
     It 'returns false for a missing directory' {
         Test-DirectoryHasExecutable -Dir (Join-Path $TestDrive 'does-not-exist') | Should -BeFalse
     }
-}
 
-Describe 'Test-DirectoryHasCompressedFile' {
-    It 'detects a nested entry archive' {
-        $d = Join-Path $TestDrive 'has-arc'
-        New-Item -ItemType Directory -Force -Path $d | Out-Null
-        New-Item -ItemType File -Force -Path (Join-Path $d 'inner.zip') | Out-Null
-        Test-DirectoryHasCompressedFile -Dir $d | Should -BeTrue
-    }
-
-    It 'returns false when only plain files are present' {
-        $d = Join-Path $TestDrive 'no-arc'
-        New-Item -ItemType Directory -Force -Path $d | Out-Null
-        New-Item -ItemType File -Force -Path (Join-Path $d 'data.bin') | Out-Null
-        Test-DirectoryHasCompressedFile -Dir $d | Should -BeFalse
-    }
-}
-
-Describe 'Test-NestedLayerShouldRecurse' {
-    It 'recurses when a layer has a compressed file and no executable' {
-        $d = Join-Path $TestDrive 'recurse-yes'
-        New-Item -ItemType Directory -Force -Path $d | Out-Null
-        New-Item -ItemType File -Force -Path (Join-Path $d 'next.7z') | Out-Null
-        Test-NestedLayerShouldRecurse -Folder $d | Should -BeTrue
-    }
-
-    It 'stops when an executable payload is present, even alongside an archive' {
-        $d = Join-Path $TestDrive 'recurse-exe'
+    It 'detects an executable that sits alongside an archive (payload-reached signal)' {
+        $d = Join-Path $TestDrive 'exe-with-arc'
         New-Item -ItemType Directory -Force -Path $d | Out-Null
         New-Item -ItemType File -Force -Path (Join-Path $d 'next.7z')   | Out-Null
         New-Item -ItemType File -Force -Path (Join-Path $d 'setup.exe') | Out-Null
-        Test-NestedLayerShouldRecurse -Folder $d | Should -BeFalse
-    }
-
-    It 'stops when there is no further compressed file to peel' {
-        $d = Join-Path $TestDrive 'recurse-none'
-        New-Item -ItemType Directory -Force -Path $d | Out-Null
-        New-Item -ItemType File -Force -Path (Join-Path $d 'document.pdf') | Out-Null
-        Test-NestedLayerShouldRecurse -Folder $d | Should -BeFalse
+        Test-DirectoryHasExecutable -Dir $d | Should -BeTrue
     }
 }
 
