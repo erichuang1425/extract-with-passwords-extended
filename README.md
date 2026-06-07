@@ -180,6 +180,8 @@ Settings are stored in `%LOCALAPPDATA%\ArchivePwExtract\config.json` and survive
 | `postExtractionAction` | `"prompt"` | What to do with the original source archives after a run: `none`, `prompt`, `delete` (successful sets, all volume parts), or `sort` (move into `_Extracted` / `_Failed`) |
 | `postExtractionSilent` | `false` | When `postExtractionAction` is `delete`, skip the confirmation prompt |
 | `preventSleepDuringExtraction` | `true` | Keep the system awake (no idle-sleep) while extraction is running; the display is allowed to sleep |
+| `engineProcessPriority` | `"BelowNormal"` | CPU/I-O priority for each extraction engine process: `Idle`, `BelowNormal`, `Normal`, `AboveNormal`, or `High`. Lower values keep browsers, downloads, and other apps responsive during extraction (`Idle` also yields disk I/O) |
+| `folderNameRules` | `[]` | Regex rules that rewrite the auto-derived output folder name — exclude or rename parts (e.g. `Nomachi-Ankergames.zip` → `Nomachi`). See [Custom output folder names](#custom-output-folder-names) |
 
 ## Supported Formats
 
@@ -243,6 +245,33 @@ Archives above the configured threshold (default 500 MB) skip the extract-even-i
 ### Parallel processing
 
 Set `maxParallelArchives` > 1 to process multiple archives concurrently using PowerShell runspace pools. Set `maxParallelPasswords` > 1 to test multiple passwords simultaneously against each archive. Both use cancellation tokens to stop work as soon as a match is found. Start with conservative values (2-4) to avoid I/O saturation.
+
+### Background-friendly engine priority
+
+Extraction is CPU- and disk-heavy, and at normal priority it can make a browser feel sluggish or slow downloads writing to the same drive. The `engineProcessPriority` setting lowers the priority of every engine process (7-Zip / WinRAR / UnRAR) so the rest of the system stays responsive. The default is `BelowNormal`; choose `Idle` for the gentlest impact (on Windows, `Idle` also drops the engine to background disk-I/O priority, which is best when something else is downloading to the same path), or `Normal` to disable throttling. The priority is applied to each engine process the moment it starts, and in parallel mode it propagates to every worker.
+
+## Custom output folder names
+
+By default each archive is extracted into a folder named after the archive with its extension stripped (`Game.zip` → `Game`). `folderNameRules` lets you reshape that name with one or more regex search/replace rules — useful for trimming publisher tags, release-group suffixes, or other noise from the folder name.
+
+Each rule is either a plain string (a regex pattern that is simply removed) or an object with `pattern`, optional `replacement` (default empty), and optional `ignoreCase` (default `true`). Rules are applied in order, after the extension is stripped and before the name is sanitized. If a rule reduces the name to nothing, the usual fallback name (`Extracted`) is used.
+
+```jsonc
+{
+    "folderNameRules": [
+        // "Nomachi-Ankergames.zip" -> "Nomachi"
+        { "pattern": "-Ankergames$", "replacement": "" },
+
+        // shorthand: a bare string is a pattern that is removed
+        "-RepackByXYZ$",
+
+        // rename: "Setup_MyGame_v1.2.zip" -> "MyGame"
+        { "pattern": "^Setup_(.+?)_v[\\d.]+$", "replacement": "$1" }
+    ]
+}
+```
+
+An invalid regex in a rule is logged and skipped rather than aborting the run, so a single bad pattern never blocks extraction.
 
 ## Known Limitations
 

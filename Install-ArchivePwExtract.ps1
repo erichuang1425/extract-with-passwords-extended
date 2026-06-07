@@ -108,7 +108,9 @@ if (!(Test-Path -LiteralPath $ConfigPath)) {
     "askOutputBehavior": true,
     "postExtractionAction": "prompt",
     "postExtractionSilent": false,
-    "preventSleepDuringExtraction": true
+    "preventSleepDuringExtraction": true,
+    "engineProcessPriority": "BelowNormal",
+    "folderNameRules": []
 }
 "@ | Set-Content -LiteralPath $ConfigPath -Encoding UTF8
 }

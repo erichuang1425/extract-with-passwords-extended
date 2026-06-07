@@ -100,6 +100,7 @@ function Invoke-ParallelPasswordTest {
         UseWinRarFallback = $UseWinRarFallback
         UsePeaZipBundled7zFallback = $UsePeaZipBundled7zFallback
         EncryptionCapableExtensions = $EncryptionCapableExtensions
+        EngineProcessPriority = $EngineProcessPriority
     }
 
     $workerCount = [math]::Min([int]$MaxThreads, [int]$Passwords.Count)
@@ -319,6 +320,8 @@ function Invoke-ParallelArchiveExtraction {
         LoadAllPasswordFiles = $LoadAllPasswordFiles
         LargeArchiveThresholdMB = $LargeArchiveThresholdMB
         SkipTestExtractFallbackForLargeArchives = $SkipTestExtractFallbackForLargeArchives
+        EngineProcessPriority = $EngineProcessPriority
+        FolderNameRules = $FolderNameRules
     }
 
     try {
