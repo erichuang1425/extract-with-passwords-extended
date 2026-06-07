@@ -39,6 +39,51 @@ function Sanitize-FileName {
     return $Name
 }
 
+function Convert-FolderNameWithRules {
+    # Apply the user's optional FolderNameRules (regex search/replace) to a
+    # derived folder name so parts of it can be excluded or rewritten — e.g. a
+    # rule "-Ankergames$" turns "Nomachi-Ankergames" into "Nomachi". Each rule is
+    # either a plain string (a pattern that is removed) or an object/hashtable
+    # with .pattern, optional .replacement (default ""), and optional .ignoreCase
+    # (default $true). Rules apply in order; an invalid regex is logged and
+    # skipped rather than aborting the run. Returns the (possibly trimmed) name.
+    param([string]$Name)
+
+    $rules = $FolderNameRules
+    if ($null -eq $rules) { return $Name }
+
+    foreach ($rule in @($rules)) {
+        if ($null -eq $rule) { continue }
+
+        if ($rule -is [string]) {
+            $pattern = $rule
+            $replacement = ""
+            $ignoreCase = $true
+        } else {
+            # PSCustomObject (from ConvertFrom-Json) or hashtable; member access
+            # is case-insensitive for both, and a missing member yields $null.
+            $pattern = [string]$rule.pattern
+            $replacement = if ($null -ne $rule.replacement) { [string]$rule.replacement } else { "" }
+            $ignoreCase = if ($null -ne $rule.ignoreCase) { [bool]$rule.ignoreCase } else { $true }
+        }
+
+        if ([string]::IsNullOrEmpty($pattern)) { continue }
+
+        try {
+            $options = if ($ignoreCase) {
+                [System.Text.RegularExpressions.RegexOptions]::IgnoreCase
+            } else {
+                [System.Text.RegularExpressions.RegexOptions]::None
+            }
+            $Name = [regex]::Replace($Name, $pattern, $replacement, $options)
+        } catch {
+            Write-Log "Skipping invalid folderNameRules pattern '$pattern': $($_.Exception.Message)" "WARN"
+        }
+    }
+
+    return $Name.Trim()
+}
+
 function Get-ArchiveBaseName {
     param([string]$Path)
 
@@ -79,11 +124,11 @@ function Get-ArchiveBaseName {
 
     foreach ($pattern in $patterns) {
         if ($name -imatch $pattern) {
-            return Sanitize-FileName ($name -ireplace $pattern, "")
+            return Sanitize-FileName (Convert-FolderNameWithRules ($name -ireplace $pattern, ""))
         }
     }
 
-    return Sanitize-FileName ([IO.Path]::GetFileNameWithoutExtension($name))
+    return Sanitize-FileName (Convert-FolderNameWithRules ([IO.Path]::GetFileNameWithoutExtension($name)))
 }
 
 function Test-IsSupportedArchiveName {

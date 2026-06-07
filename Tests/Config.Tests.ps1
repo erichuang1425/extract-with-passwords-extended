@@ -145,6 +145,30 @@ Describe 'Test-ConfigSane enum validation' {
             $script:PostExtractionAction | Should -Be 'sort'
         }
     }
+
+    It 'resets an invalid EngineProcessPriority to BelowNormal' {
+        InModuleScope CfgUnderTest {
+            $script:EngineProcessPriority = 'turbo'
+            Test-ConfigSane
+            $script:EngineProcessPriority | Should -Be 'BelowNormal'
+        }
+    }
+
+    It 'normalizes the casing of a valid EngineProcessPriority' {
+        InModuleScope CfgUnderTest {
+            $script:EngineProcessPriority = 'idle'
+            Test-ConfigSane
+            $script:EngineProcessPriority | Should -Be 'Idle'
+        }
+    }
+
+    It 'preserves a valid EngineProcessPriority' {
+        InModuleScope CfgUnderTest {
+            $script:EngineProcessPriority = 'High'
+            Test-ConfigSane
+            $script:EngineProcessPriority | Should -Be 'High'
+        }
+    }
 }
 
 Describe 'Post-extraction & power defaults' {
@@ -157,6 +181,18 @@ Describe 'Post-extraction & power defaults' {
     It 'defaults PreventSleepDuringExtraction to enabled' {
         InModuleScope CfgUnderTest {
             $script:PreventSleepDuringExtraction | Should -BeTrue
+        }
+    }
+
+    It 'defaults EngineProcessPriority to BelowNormal' {
+        InModuleScope CfgUnderTest {
+            $script:EngineProcessPriority | Should -Be 'BelowNormal'
+        }
+    }
+
+    It 'defaults FolderNameRules to an empty list' {
+        InModuleScope CfgUnderTest {
+            @($script:FolderNameRules).Count | Should -Be 0
         }
     }
 }

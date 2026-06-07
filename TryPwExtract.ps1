@@ -81,6 +81,8 @@ try {
     Write-Log "MaxParallelPasswords: $MaxParallelPasswords"
     Write-Log "MaxArchivesPerScan: $MaxArchivesPerScan"
     Write-Log "PreferGui: $PreferGui"
+    Write-Log "EngineProcessPriority: $EngineProcessPriority"
+    Write-Log "FolderNameRules: $(@($FolderNameRules).Count) rule(s)"
 
     foreach ($p in $InputPaths) {
         Write-Log "Input: $p"
