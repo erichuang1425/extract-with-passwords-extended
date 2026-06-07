@@ -41,6 +41,7 @@ $PwFile = Join-Path $PwDir "passwords.txt"
 $HelperPath = Join-Path $ToolDir "TryPwExtract.ps1"
 $UninstallPath = Join-Path $ToolDir "Uninstall-ArchivePwExtract.ps1"
 $ConfigPath = Join-Path $ToolDir "config.json"
+$LaunchGuiVbs = Join-Path $ToolDir "LaunchGui.vbs"
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 
@@ -102,6 +103,7 @@ if (!(Test-Path -LiteralPath $ConfigPath)) {
     "maxParallelPasswords": 1,
     "maxArchivesPerScan": 0,
     "preferGui": false,
+    "confirmGuiClose": true,
     "extractNestedArchives": false,
     "maxNestedDepth": 1,
     "deleteNestedArchiveAfterExtract": false,
@@ -190,6 +192,35 @@ if ($copyErrors.Count -gt 0) {
 }
 
 # ============================================================
+# GUI launcher shim (no console window)
+# ============================================================
+# A windowless wscript shim launches the WPF GUI with PowerShell fully hidden, so
+# the "...with password list" right-click entries open straight into the window
+# with NO flashing console. The shim resolves TryPwExtract.ps1 relative to itself
+# (both live in $ToolDir), so its body is static ASCII and copes with non-ASCII
+# install paths at runtime instead of baking the path in.
+$LaunchGuiContent = @'
+' LaunchGui.vbs - opens the Archive Password Extractor GUI with no console window.
+Option Explicit
+Dim sh, fso, helper, ps, i
+Set sh = CreateObject("WScript.Shell")
+Set fso = CreateObject("Scripting.FileSystemObject")
+helper = fso.BuildPath(fso.GetParentFolderName(WScript.ScriptFullName), "TryPwExtract.ps1")
+ps = "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File """ & helper & """ -Gui"
+For i = 0 To WScript.Arguments.Count - 1
+    ps = ps & " """ & WScript.Arguments(i) & """"
+Next
+sh.Run ps, 0, False
+'@
+
+try {
+    Set-Content -LiteralPath $LaunchGuiVbs -Value $LaunchGuiContent -Encoding ASCII
+    Write-Host "  Created LaunchGui.vbs" -ForegroundColor DarkGray
+} catch {
+    $copyErrors += "LaunchGui.vbs: $($_.Exception.Message)"
+}
+
+# ============================================================
 # Shared extension list for context menus and uninstaller
 # ============================================================
 
@@ -230,12 +261,20 @@ $extArrayString
 
 foreach (`$ext in `$archiveExtensions) {
     Remove-Item -Path "HKCU:\Software\Classes\SystemFileAssociations\`$ext\shell\ArchivePwExtract" -Recurse -Force
+    Remove-Item -Path "HKCU:\Software\Classes\SystemFileAssociations\`$ext\shell\ArchivePwExtractConsole" -Recurse -Force
+    Remove-Item -Path "HKCU:\Software\Classes\SystemFileAssociations\`$ext\shell\ArchivePwExtractGui" -Recurse -Force
 }
 
 Remove-Item -Path "HKCU:\Software\Classes\Directory\shell\ArchivePwExtractFolder" -Recurse -Force
+Remove-Item -Path "HKCU:\Software\Classes\Directory\shell\ArchivePwExtractFolderConsole" -Recurse -Force
+Remove-Item -Path "HKCU:\Software\Classes\Directory\shell\ArchivePwExtractFolderGui" -Recurse -Force
 Remove-Item -Path "HKCU:\Software\Classes\Directory\Background\shell\ArchivePwExtractHere" -Recurse -Force
+Remove-Item -Path "HKCU:\Software\Classes\Directory\Background\shell\ArchivePwExtractHereConsole" -Recurse -Force
+Remove-Item -Path "HKCU:\Software\Classes\Directory\Background\shell\ArchivePwExtractHereGui" -Recurse -Force
 Remove-Item -Path "HKCU:\Software\Classes\Directory\Background\shell\ArchivePwEditPasswords" -Recurse -Force
 Remove-Item -Path "HKCU:\Software\Classes\Directory\Background\shell\ArchivePwEditConfig" -Recurse -Force
+
+Remove-Item -Path (Join-Path `$env:LOCALAPPDATA "ArchivePwExtract\LaunchGui.vbs") -Force
 
 `$classicMenuKey = "HKCU:\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32"
 if (Test-Path -Path `$classicMenuKey) {
@@ -278,18 +317,36 @@ $totalExtensions = $ArchiveExtensions.Count
 
 foreach ($Ext in $ArchiveExtensions) {
     try {
+        # Primary entry: open the GUI with no console window (via the VBS shim).
         $MenuPath = "HKCU:\Software\Classes\SystemFileAssociations\$Ext\shell\ArchivePwExtract"
         $CommandPath = "$MenuPath\command"
 
         New-Item -Path $MenuPath -Force | Out-Null
         New-Item -Path $CommandPath -Force | Out-Null
 
-        Set-ItemProperty -Path $MenuPath -Name "(default)" -Value "Try password list and extract"
-        Set-ItemProperty -Path $MenuPath -Name "MUIVerb" -Value "Try password list and extract"
+        Set-ItemProperty -Path $MenuPath -Name "(default)" -Value "Extract with password list"
+        Set-ItemProperty -Path $MenuPath -Name "MUIVerb" -Value "Extract with password list"
         Set-ItemProperty -Path $MenuPath -Name "Icon" -Value "powershell.exe"
 
-        $Command = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$HelperPath`" `"%1`""
-        Set-ItemProperty -Path $CommandPath -Name "(default)" -Value $Command
+        $GuiCommand = "wscript.exe `"$LaunchGuiVbs`" `"%1`""
+        Set-ItemProperty -Path $CommandPath -Name "(default)" -Value $GuiCommand
+
+        # Secondary entry: the text-mode console flow.
+        $ConsoleMenuPath = "HKCU:\Software\Classes\SystemFileAssociations\$Ext\shell\ArchivePwExtractConsole"
+        $ConsoleCommandPath = "$ConsoleMenuPath\command"
+
+        New-Item -Path $ConsoleMenuPath -Force | Out-Null
+        New-Item -Path $ConsoleCommandPath -Force | Out-Null
+
+        Set-ItemProperty -Path $ConsoleMenuPath -Name "(default)" -Value "Extract in console (password list)"
+        Set-ItemProperty -Path $ConsoleMenuPath -Name "MUIVerb" -Value "Extract in console (password list)"
+        Set-ItemProperty -Path $ConsoleMenuPath -Name "Icon" -Value "powershell.exe"
+
+        $ConsoleCommand = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$HelperPath`" `"%1`""
+        Set-ItemProperty -Path $ConsoleCommandPath -Name "(default)" -Value $ConsoleCommand
+
+        # Remove the standalone "...Gui" entry shipped by an earlier build, if present.
+        Remove-Item -Path "HKCU:\Software\Classes\SystemFileAssociations\$Ext\shell\ArchivePwExtractGui" -Recurse -Force -ErrorAction SilentlyContinue
 
         $registeredCount++
     } catch {
@@ -300,6 +357,7 @@ foreach ($Ext in $ArchiveExtensions) {
 
 $folderMenuOk = $true
 try {
+    # Primary entry: open the GUI with no console window (via the VBS shim).
     $FolderMenuPath = "HKCU:\Software\Classes\Directory\shell\ArchivePwExtractFolder"
     $FolderCommandPath = "$FolderMenuPath\command"
 
@@ -310,8 +368,24 @@ try {
     Set-ItemProperty -Path $FolderMenuPath -Name "MUIVerb" -Value "Extract archives with password list"
     Set-ItemProperty -Path $FolderMenuPath -Name "Icon" -Value "powershell.exe"
 
-    $FolderCommand = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$HelperPath`" `"%1`""
+    $FolderCommand = "wscript.exe `"$LaunchGuiVbs`" `"%1`""
     Set-ItemProperty -Path $FolderCommandPath -Name "(default)" -Value $FolderCommand
+
+    # Secondary entry: the text-mode console flow for a right-clicked folder.
+    $FolderConsoleMenuPath = "HKCU:\Software\Classes\Directory\shell\ArchivePwExtractFolderConsole"
+    $FolderConsoleCommandPath = "$FolderConsoleMenuPath\command"
+
+    New-Item -Path $FolderConsoleMenuPath -Force | Out-Null
+    New-Item -Path $FolderConsoleCommandPath -Force | Out-Null
+
+    Set-ItemProperty -Path $FolderConsoleMenuPath -Name "(default)" -Value "Extract archives in console (list)"
+    Set-ItemProperty -Path $FolderConsoleMenuPath -Name "MUIVerb" -Value "Extract archives in console (list)"
+    Set-ItemProperty -Path $FolderConsoleMenuPath -Name "Icon" -Value "powershell.exe"
+
+    $FolderConsoleCommand = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$HelperPath`" `"%1`""
+    Set-ItemProperty -Path $FolderConsoleCommandPath -Name "(default)" -Value $FolderConsoleCommand
+
+    Remove-Item -Path "HKCU:\Software\Classes\Directory\shell\ArchivePwExtractFolderGui" -Recurse -Force -ErrorAction SilentlyContinue
 } catch {
     $folderMenuOk = $false
     Write-Host "  Warning: Failed to register folder context menu: $($_.Exception.Message)" -ForegroundColor Yellow
@@ -319,6 +393,7 @@ try {
 
 $backgroundMenuOk = $true
 try {
+    # Primary entry: open the GUI with no console window (via the VBS shim).
     $BackgroundMenuPath = "HKCU:\Software\Classes\Directory\Background\shell\ArchivePwExtractHere"
     $BackgroundCommandPath = "$BackgroundMenuPath\command"
 
@@ -329,8 +404,24 @@ try {
     Set-ItemProperty -Path $BackgroundMenuPath -Name "MUIVerb" -Value "Extract archives here with password list"
     Set-ItemProperty -Path $BackgroundMenuPath -Name "Icon" -Value "powershell.exe"
 
-    $BackgroundCommand = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$HelperPath`" `"%V`""
+    $BackgroundCommand = "wscript.exe `"$LaunchGuiVbs`" `"%V`""
     Set-ItemProperty -Path $BackgroundCommandPath -Name "(default)" -Value $BackgroundCommand
+
+    # Secondary entry: the text-mode console flow for the folder background.
+    $BackgroundConsoleMenuPath = "HKCU:\Software\Classes\Directory\Background\shell\ArchivePwExtractHereConsole"
+    $BackgroundConsoleCommandPath = "$BackgroundConsoleMenuPath\command"
+
+    New-Item -Path $BackgroundConsoleMenuPath -Force | Out-Null
+    New-Item -Path $BackgroundConsoleCommandPath -Force | Out-Null
+
+    Set-ItemProperty -Path $BackgroundConsoleMenuPath -Name "(default)" -Value "Extract here in console (list)"
+    Set-ItemProperty -Path $BackgroundConsoleMenuPath -Name "MUIVerb" -Value "Extract here in console (list)"
+    Set-ItemProperty -Path $BackgroundConsoleMenuPath -Name "Icon" -Value "powershell.exe"
+
+    $BackgroundConsoleCommand = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$HelperPath`" `"%V`""
+    Set-ItemProperty -Path $BackgroundConsoleCommandPath -Name "(default)" -Value $BackgroundConsoleCommand
+
+    Remove-Item -Path "HKCU:\Software\Classes\Directory\Background\shell\ArchivePwExtractHereGui" -Recurse -Force -ErrorAction SilentlyContinue
 } catch {
     $backgroundMenuOk = $false
     Write-Host "  Warning: Failed to register background context menu: $($_.Exception.Message)" -ForegroundColor Yellow
@@ -453,6 +544,7 @@ if ($win11ClassicApplied) {
 Write-Host ""
 Write-Host "  Files installed:" -ForegroundColor Cyan
 Write-Host "    Orchestrator:   $HelperPath"
+Write-Host "    GUI launcher:   $LaunchGuiVbs"
 Write-Host "    Modules:        $ModulesInstallDir ($($moduleFiles.Count) files)"
 Write-Host "    Resources:      $ResourcesInstallDir"
 
@@ -468,9 +560,11 @@ Write-Host "    Config:     " -NoNewline; Write-Host $ConfigPath -ForegroundColo
 Write-Host "    Logs:       " -NoNewline; Write-Host $LogDir -ForegroundColor White
 Write-Host ""
 Write-Host "  New in v$($AppVersion):" -ForegroundColor Cyan
+Write-Host "    - Right-click 'Extract with password list' now opens the GUI directly"
+Write-Host "      (no console window), with your selection already queued"
+Write-Host "    - 'Extract in console (password list)' is the secondary, text-mode entry"
+Write-Host "    - GUI closes with a confirmation prompt; failed launches no longer vanish"
 Write-Host "    - Recursive nested-archive extraction (set extractNestedArchives: true)"
-Write-Host "    - Modular architecture with separate module files"
-Write-Host "    - WPF GUI mode (set preferGui: true in config.json)"
 Write-Host "    - Parallel archive and password processing"
 Write-Host "    - Condensed logging (no more per-file wrong-password spam)"
 Write-Host "    - Error classification (wrong password vs corrupt vs timeout)"

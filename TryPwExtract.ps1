@@ -1,9 +1,45 @@
 param(
+    # Force the WPF GUI regardless of the preferGui config setting. The Explorer
+    # "Extract with password list" entries pass this (via LaunchGui.vbs) so the
+    # graphical interface opens with the right-clicked selection already queued.
+    [switch]$Gui,
+
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$InputPaths
 )
 
 $ErrorActionPreference = "Continue"
+
+# Last-resort failure handler so a launch never just flashes a window and
+# vanishes. When launched from the Explorer "...with password list" entry the GUI
+# runs hidden (via LaunchGui.vbs) with no console to read from, so surface fatal
+# errors in a dialog; the console flow instead pauses until the user acknowledges.
+function Invoke-FatalExit {
+    param([string]$Message)
+    if ($Gui) {
+        try {
+            Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
+            [void][System.Windows.Forms.MessageBox]::Show(
+                $Message, "Archive Password Extractor - Error",
+                [System.Windows.Forms.MessageBoxButtons]::OK,
+                [System.Windows.Forms.MessageBoxIcon]::Error)
+        } catch { }
+    } else {
+        Write-Host ""
+        Write-Host $Message -ForegroundColor Red
+        Write-Host ""
+        try { [void](Read-Host "Press Enter to close") } catch { }
+    }
+}
+
+# Catch terminating errors that occur OUTSIDE the main try/catch below — most
+# importantly during module loading and Read-Config, which run before it. Without
+# this, a half-updated install (or any early failure) would close the window
+# instantly with no message.
+trap {
+    Invoke-FatalExit "The extractor could not start:`n`n$($_.Exception.Message)"
+    exit 1
+}
 
 if ($PSVersionTable.PSVersion.Major -lt 3) {
     Write-Host "PowerShell 3.0 or later is required. Current: $($PSVersionTable.PSVersion)" -ForegroundColor Red
@@ -81,6 +117,7 @@ try {
     Write-Log "MaxParallelPasswords: $MaxParallelPasswords"
     Write-Log "MaxArchivesPerScan: $MaxArchivesPerScan"
     Write-Log "PreferGui: $PreferGui"
+    Write-Log "Gui switch: $Gui"
     Write-Log "EngineProcessPriority: $EngineProcessPriority"
     Write-Log "FolderNameRules: $(@($FolderNameRules).Count) rule(s)"
 
@@ -90,10 +127,15 @@ try {
 
     Write-Log "============================================================"
 
-    # GUI mode check
+    # GUI mode check. The -Gui switch (from the dedicated context-menu entries)
+    # forces it; otherwise the preferGui config setting decides. Either way it
+    # needs WPF, which ships with PowerShell 5+.
     $launchGui = $false
-    if ($PreferGui -and $PSVersionTable.PSVersion.Major -ge 5) {
+    if (($PreferGui -or $Gui) -and $PSVersionTable.PSVersion.Major -ge 5) {
         $launchGui = $true
+    } elseif ($Gui) {
+        Write-Status "GUI mode requires PowerShell 5 or later; falling back to console." "warn"
+        Write-Log "GUI requested but PowerShell $($PSVersionTable.PSVersion) is too old; using console." "WARN"
     }
 
     # Interactive browse menu when launched without arguments
@@ -112,7 +154,7 @@ try {
     }
 
     if ($launchGui) {
-        Show-ExtractionGui -ModulesDir $ModulesDir
+        Show-ExtractionGui -ModulesDir $ModulesDir -InitialPaths $InputPaths
         exit 0
     }
 
@@ -1308,7 +1350,11 @@ catch {
     Write-Host ""
     Write-Status "Fatal error: $($_.Exception.Message)" "fail"
     Write-Log "Fatal error: $($_.Exception.ToString())" "ERROR"
-    Pause-Close
+    if ($Gui) {
+        Invoke-FatalExit "Fatal error: $($_.Exception.Message)`n`nSee log:`n$RunLogPath"
+    } else {
+        Pause-Close
+    }
     exit 1
 }
 finally {
