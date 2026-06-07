@@ -19,6 +19,9 @@ Windows context-menu tool for extracting encrypted archives using a password lis
 
 ### GUI
 - **WPF GUI mode** — native Windows GUI with archive list, dual progress bars, live log viewer, and drag-and-drop
+- **Launch the GUI straight from Explorer** — dedicated *"Extract with GUI (password list)"* right-click entries open the window with your selection already queued
+- **Right-click row actions** — open the output folder or file location, copy the recovered password or archive path, and remove queued items
+- **Close confirmation** — closing the window with archives queued (or a run in progress) asks first, so nothing is discarded by accident (`confirmGuiClose`)
 - **Interactive browse interface** — file/folder browser when launched without arguments
 - **Toast notifications** — Windows notification when batch extraction completes
 
@@ -98,6 +101,15 @@ Right-click any supported archive and select **Try password list and extract**. 
 
 Right-click a folder and select **Extract archives with password list** to scan and extract all archives inside (with optional recursive scanning).
 
+### Right-click → open the GUI
+
+Prefer the windowed experience? Right-click an archive or folder (or a folder's empty
+background) and select **Extract with GUI (password list)**. The WPF window opens with
+your selection already queued — review the list, then click **Start Extraction**. Each
+row has a right-click menu (open output folder / file location, copy the recovered
+password or path, remove from list), and closing the window asks for confirmation while
+archives are queued or a run is still in progress.
+
 ### Edit your password list
 
 Right-click any folder background and select **Edit archive password list** to open the password file in Notepad. Add one password per line. Lines starting with `#` are ignored.
@@ -173,6 +185,7 @@ Settings are stored in `%LOCALAPPDATA%\ArchivePwExtract\config.json` and survive
 | `maxParallelPasswords` | `1` | Number of passwords to test concurrently per archive |
 | `maxArchivesPerScan` | `0` | Cap on archives detected per folder scan (0 = unbounded). Stops recursive enumeration early on huge directories. |
 | `preferGui` | `false` | Launch WPF GUI instead of console mode (requires PS 5.1+) |
+| `confirmGuiClose` | `true` | Ask for confirmation before closing the GUI window while archives are queued or a run is in progress |
 | `extractNestedArchives` | `false` | After extraction, scan output folders and extract archives found inside them |
 | `maxNestedDepth` | `1` | How many levels of nesting to recurse into (0 disables; clamped to 1–10) |
 | `deleteNestedArchiveAfterExtract` | `false` | Delete a nested archive file after it is successfully extracted (applies to archives found *inside* output, not the original inputs) |

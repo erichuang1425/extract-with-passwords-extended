@@ -46,6 +46,9 @@ $MaxParallelArchives = 1
 $MaxParallelPasswords = 1
 $MaxArchivesPerScan = 0
 $PreferGui = $false
+# Ask for confirmation before closing the GUI window when archives are queued,
+# so a stray click on the close button never silently discards the run/results.
+$ConfirmGuiClose = $true
 
 $ExtractNestedArchives = $false
 $MaxNestedDepth = 1
@@ -211,6 +214,7 @@ function Read-Config {
             "maxParallelPasswords" = "MaxParallelPasswords"
             "maxArchivesPerScan" = "MaxArchivesPerScan"
             "preferGui" = "PreferGui"
+            "confirmGuiClose" = "ConfirmGuiClose"
             "extractNestedArchives" = "ExtractNestedArchives"
             "maxNestedDepth" = "MaxNestedDepth"
             "deleteNestedArchiveAfterExtract" = "DeleteNestedArchiveAfterExtract"

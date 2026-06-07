@@ -1,6 +1,7 @@
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Archive Password Extractor" Height="680" Width="820"
+        Title="Archive Password Extractor" Height="700" Width="860"
+        MinHeight="520" MinWidth="640"
         WindowStartupLocation="CenterScreen" Background="#1e1e2e">
     <Window.Resources>
         <Style TargetType="Button">
@@ -63,17 +64,30 @@
         </Grid.RowDefinitions>
 
         <!-- Toolbar -->
-        <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,8">
-            <Button Name="btnAddFiles" Content="Add Files" Margin="0,0,6,0"/>
-            <Button Name="btnAddFolder" Content="Add Folder" Margin="0,0,6,0"/>
-            <Button Name="btnClear" Content="Clear" Margin="0,0,6,0"/>
-            <Button Name="btnSettings" Content="Settings" Margin="0,0,6,0" HorizontalAlignment="Right"/>
-        </StackPanel>
+        <DockPanel Grid.Row="0" Margin="0,0,0,8" LastChildFill="False">
+            <Button Name="btnAddFiles" Content="Add Files" Margin="0,0,6,0" DockPanel.Dock="Left"/>
+            <Button Name="btnAddFolder" Content="Add Folder" Margin="0,0,6,0" DockPanel.Dock="Left"/>
+            <Button Name="btnRemove" Content="Remove" Margin="0,0,6,0" DockPanel.Dock="Left"/>
+            <Button Name="btnClear" Content="Clear" Margin="0,0,6,0" DockPanel.Dock="Left"/>
+            <Button Name="btnSettings" Content="Settings" Margin="6,0,0,0" DockPanel.Dock="Right"/>
+            <Button Name="btnEditPasswords" Content="Edit Passwords" Margin="6,0,0,0" DockPanel.Dock="Right"/>
+        </DockPanel>
 
         <!-- Archive List -->
         <DataGrid Grid.Row="1" Name="dgArchives" AutoGenerateColumns="False"
-                  IsReadOnly="True" SelectionMode="Single" CanUserReorderColumns="False"
+                  IsReadOnly="True" SelectionMode="Extended" CanUserReorderColumns="False"
                   AllowDrop="True" Margin="0,0,0,8">
+            <DataGrid.ContextMenu>
+                <ContextMenu Name="rowMenu">
+                    <MenuItem Name="miOpenOutput" Header="Open output folder"/>
+                    <MenuItem Name="miOpenLocation" Header="Open file location"/>
+                    <Separator/>
+                    <MenuItem Name="miCopyPassword" Header="Copy found password"/>
+                    <MenuItem Name="miCopyPath" Header="Copy archive path"/>
+                    <Separator/>
+                    <MenuItem Name="miRemove" Header="Remove from list"/>
+                </ContextMenu>
+            </DataGrid.ContextMenu>
             <DataGrid.Columns>
                 <DataGridTextColumn Header="#" Binding="{Binding Index}" Width="35">
                     <DataGridTextColumn.ElementStyle>
@@ -89,7 +103,7 @@
                         </Style>
                     </DataGridTextColumn.ElementStyle>
                 </DataGridTextColumn>
-                <DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="100">
+                <DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="110">
                     <DataGridTextColumn.ElementStyle>
                         <Style TargetType="TextBlock">
                             <Setter Property="Foreground" Value="#a6adc8"/>
@@ -130,12 +144,14 @@
         </Border>
 
         <!-- Action Bar -->
-        <StackPanel Grid.Row="4" Orientation="Horizontal">
+        <DockPanel Grid.Row="4" LastChildFill="False">
             <Button Name="btnStart" Content="Start Extraction" Background="#313244" Foreground="#a6e3a1"
-                    BorderBrush="#a6e3a1" Margin="0,0,6,0" FontWeight="SemiBold"/>
+                    BorderBrush="#a6e3a1" Margin="0,0,6,0" FontWeight="SemiBold" DockPanel.Dock="Left"/>
             <Button Name="btnCancel" Content="Cancel" Foreground="#f38ba8" BorderBrush="#f38ba8"
-                    IsEnabled="False" Margin="0,0,6,0"/>
-            <Button Name="btnOpenOutput" Content="Open Output" IsEnabled="False" Margin="0,0,6,0"/>
-        </StackPanel>
+                    IsEnabled="False" Margin="0,0,6,0" DockPanel.Dock="Left"/>
+            <Button Name="btnOpenOutput" Content="Open Output" IsEnabled="False" Margin="0,0,6,0" DockPanel.Dock="Left"/>
+            <TextBlock Name="txtCount" Text="0 archives" Foreground="#6c7086" FontSize="12"
+                       VerticalAlignment="Center" DockPanel.Dock="Right"/>
+        </DockPanel>
     </Grid>
 </Window>
