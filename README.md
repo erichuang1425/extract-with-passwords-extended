@@ -19,7 +19,7 @@ Windows context-menu tool for extracting encrypted archives using a password lis
 
 ### GUI
 - **WPF GUI mode** — native Windows GUI with archive list, dual progress bars, live log viewer, and drag-and-drop
-- **Launch the GUI straight from Explorer** — dedicated *"Extract with GUI (password list)"* right-click entries open the window with your selection already queued
+- **The right-click menu opens the GUI by default** — *"Extract with password list"* launches the window (with no flashing console, via a hidden VBS shim) and your selection already queued; *"Extract in console (password list)"* is the secondary text-mode entry
 - **Right-click row actions** — open the output folder or file location, copy the recovered password or archive path, and remove queued items
 - **Close confirmation** — closing the window with archives queued (or a run in progress) asks first, so nothing is discarded by accident (`confirmGuiClose`)
 - **Interactive browse interface** — file/folder browser when launched without arguments
@@ -61,9 +61,9 @@ Windows context-menu tool for extracting encrypted archives using a password lis
    - Or run from a PowerShell prompt: `powershell -ExecutionPolicy Bypass -File Install-ArchivePwExtract.ps1`
 3. The installer will:
    - Copy the orchestrator and module files to `%LOCALAPPDATA%\ArchivePwExtract\`
-   - Copy the WPF GUI resources
+   - Copy the WPF GUI resources and write the windowless `LaunchGui.vbs` launcher
    - Create a default `config.json` (if one doesn't exist)
-   - Register Windows Explorer context menu entries for all supported archive types
+   - Register Windows Explorer context menu entries (GUI + console) for all supported archive types
    - Create a Send To shortcut
    - Create a password list template (if one doesn't exist) and open it in Notepad
    - On Windows 11: optionally restore the classic right-click menu
@@ -95,20 +95,27 @@ See [CHANGELOG.md](CHANGELOG.md) for the release history.
 
 ### Right-click an archive file
 
-Right-click any supported archive and select **Try password list and extract**. The tool will try each password from your list until one works.
+Right-click any supported archive and select **Extract with password list**. This opens
+the **GUI** (with no console window) — the WPF window appears with your selection already
+queued. Review the list, then click **Start Extraction**. Each row has a right-click menu
+(open output folder / file location, copy the recovered password or path, remove from
+list), and closing the window asks for confirmation while archives are queued or a run is
+still in progress.
+
+Prefer text mode? Select **Extract in console (password list)** instead for the classic
+console flow.
 
 ### Right-click a folder
 
-Right-click a folder and select **Extract archives with password list** to scan and extract all archives inside (with optional recursive scanning).
+Right-click a folder and select **Extract archives with password list** (GUI) to scan and
+queue all archives inside, or **Extract archives in console (list)** for the console flow.
+The same entries are available on a folder's empty background.
 
-### Right-click → open the GUI
-
-Prefer the windowed experience? Right-click an archive or folder (or a folder's empty
-background) and select **Extract with GUI (password list)**. The WPF window opens with
-your selection already queued — review the list, then click **Start Extraction**. Each
-row has a right-click menu (open output folder / file location, copy the recovered
-password or path, remove from list), and closing the window asks for confirmation while
-archives are queued or a run is still in progress.
+> **How launching works.** The GUI entries start through a tiny windowless `LaunchGui.vbs`
+> shim so PowerShell runs fully hidden — no flashing terminal. A console launch that hits
+> an early error no longer vanishes silently; it pauses with the error first. See
+> [docs/launch-and-window-lifecycle.md](docs/launch-and-window-lifecycle.md) for the full
+> design.
 
 ### Edit your password list
 

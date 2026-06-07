@@ -29,12 +29,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`-ibck`).
 
 ### Added
-- **Launch the WPF GUI straight from Explorer.** New *"Extract with GUI (password
-  list)"* right-click entries (on archive files, folders, and folder backgrounds)
-  open the windowed extractor with the right-clicked selection already queued, so
-  you can review the list and click **Start Extraction**. The orchestrator gained a
-  `-Gui` switch that forces GUI mode regardless of `preferGui`, and the GUI now
-  accepts the launch selection instead of always opening empty.
+- **The Explorer right-click menu now opens the GUI by default.** *"Extract with
+  password list"* (on archive files, folders, and folder backgrounds) launches the
+  windowed extractor with the right-clicked selection already queued; *"Extract in
+  console (password list)"* is the secondary text-mode entry. The GUI is started
+  through a tiny windowless `LaunchGui.vbs` shim so PowerShell runs **fully hidden** —
+  no flashing console window. The orchestrator gained a `-Gui` switch that forces GUI
+  mode regardless of `preferGui`, and the GUI accepts the launch selection instead of
+  always opening empty.
+
+### Fixed
+- **A context-menu launch no longer just flashes a terminal and vanishes.** Module
+  loading and `Read-Config` run before the orchestrator's main `try/catch`, so an
+  early failure (e.g. a half-updated install) used to close the console instantly
+  with no message. A script-level `trap` now catches those errors and either pauses
+  the console ("Press Enter to close") or, in hidden GUI mode, shows an error dialog.
+  The new launch/window design is documented in
+  `docs/launch-and-window-lifecycle.md`.
 - **GUI usability pass.** The archive list has a right-click context menu (open
   output folder, open file location, copy the recovered password, copy the archive
   path, remove from list), supports multi-select and a **Remove** button, opens a
