@@ -45,6 +45,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   layer, so the very first layer that yields an executable ends the descent.
 - **Keep the system awake during long runs** (`preventSleepDuringExtraction`): the
   machine no longer idle-sleeps mid-extraction (the display may still sleep).
+- **Background-friendly engine priority** (`engineProcessPriority`): each
+  extraction engine process (7-Zip / WinRAR / UnRAR) now runs at a configurable
+  CPU/I-O priority — `Idle`, `BelowNormal` (new default), `Normal`, `AboveNormal`,
+  or `High`. Lowering it stops a busy extraction from starving browsers, downloads
+  writing to the same drive, and other apps; `Idle` additionally yields background
+  disk-I/O priority on Windows. The setting is applied the moment each engine
+  starts and propagates to every parallel worker.
+- **Custom output folder names** (`folderNameRules`): regex search/replace rules
+  that reshape the auto-derived output folder name, so publisher tags or other
+  noise can be excluded or rewritten — e.g. `Nomachi-Ankergames.zip` extracts into
+  a `Nomachi` folder. Each rule is a bare pattern (removed) or an object with
+  `pattern` / `replacement` / `ignoreCase`; rules apply in order and an invalid
+  pattern is logged and skipped instead of failing the run.
 - A clearer progress indicator: it now shows elapsed time and a passwords/sec
   rate, and only shows a remaining-time estimate once the sample is large enough
   to be meaningful (instead of a misleading one-sample "~1s left").
