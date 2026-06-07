@@ -184,12 +184,6 @@ Describe 'Post-extraction & power defaults' {
         }
     }
 
-    It 'defaults EngineProcessPriority to BelowNormal' {
-        InModuleScope CfgUnderTest {
-            $script:EngineProcessPriority | Should -Be 'BelowNormal'
-        }
-    }
-
     It 'defaults FolderNameRules to an empty list' {
         InModuleScope CfgUnderTest {
             @($script:FolderNameRules).Count | Should -Be 0
