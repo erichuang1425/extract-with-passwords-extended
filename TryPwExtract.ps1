@@ -1,4 +1,9 @@
 param(
+    # Force the WPF GUI regardless of the preferGui config setting. Lets the
+    # Explorer "...with GUI" context-menu entries open the graphical interface
+    # with the right-clicked selection already queued.
+    [switch]$Gui,
+
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$InputPaths
 )
@@ -81,6 +86,7 @@ try {
     Write-Log "MaxParallelPasswords: $MaxParallelPasswords"
     Write-Log "MaxArchivesPerScan: $MaxArchivesPerScan"
     Write-Log "PreferGui: $PreferGui"
+    Write-Log "Gui switch: $Gui"
     Write-Log "EngineProcessPriority: $EngineProcessPriority"
     Write-Log "FolderNameRules: $(@($FolderNameRules).Count) rule(s)"
 
@@ -90,10 +96,15 @@ try {
 
     Write-Log "============================================================"
 
-    # GUI mode check
+    # GUI mode check. The -Gui switch (from the dedicated context-menu entries)
+    # forces it; otherwise the preferGui config setting decides. Either way it
+    # needs WPF, which ships with PowerShell 5+.
     $launchGui = $false
-    if ($PreferGui -and $PSVersionTable.PSVersion.Major -ge 5) {
+    if (($PreferGui -or $Gui) -and $PSVersionTable.PSVersion.Major -ge 5) {
         $launchGui = $true
+    } elseif ($Gui) {
+        Write-Status "GUI mode requires PowerShell 5 or later; falling back to console." "warn"
+        Write-Log "GUI requested but PowerShell $($PSVersionTable.PSVersion) is too old; using console." "WARN"
     }
 
     # Interactive browse menu when launched without arguments
@@ -112,7 +123,7 @@ try {
     }
 
     if ($launchGui) {
-        Show-ExtractionGui -ModulesDir $ModulesDir
+        Show-ExtractionGui -ModulesDir $ModulesDir -InitialPaths $InputPaths
         exit 0
     }
 

@@ -102,6 +102,7 @@ if (!(Test-Path -LiteralPath $ConfigPath)) {
     "maxParallelPasswords": 1,
     "maxArchivesPerScan": 0,
     "preferGui": false,
+    "confirmGuiClose": true,
     "extractNestedArchives": false,
     "maxNestedDepth": 1,
     "deleteNestedArchiveAfterExtract": false,
@@ -230,10 +231,13 @@ $extArrayString
 
 foreach (`$ext in `$archiveExtensions) {
     Remove-Item -Path "HKCU:\Software\Classes\SystemFileAssociations\`$ext\shell\ArchivePwExtract" -Recurse -Force
+    Remove-Item -Path "HKCU:\Software\Classes\SystemFileAssociations\`$ext\shell\ArchivePwExtractGui" -Recurse -Force
 }
 
 Remove-Item -Path "HKCU:\Software\Classes\Directory\shell\ArchivePwExtractFolder" -Recurse -Force
+Remove-Item -Path "HKCU:\Software\Classes\Directory\shell\ArchivePwExtractFolderGui" -Recurse -Force
 Remove-Item -Path "HKCU:\Software\Classes\Directory\Background\shell\ArchivePwExtractHere" -Recurse -Force
+Remove-Item -Path "HKCU:\Software\Classes\Directory\Background\shell\ArchivePwExtractHereGui" -Recurse -Force
 Remove-Item -Path "HKCU:\Software\Classes\Directory\Background\shell\ArchivePwEditPasswords" -Recurse -Force
 Remove-Item -Path "HKCU:\Software\Classes\Directory\Background\shell\ArchivePwEditConfig" -Recurse -Force
 
@@ -291,6 +295,20 @@ foreach ($Ext in $ArchiveExtensions) {
         $Command = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$HelperPath`" `"%1`""
         Set-ItemProperty -Path $CommandPath -Name "(default)" -Value $Command
 
+        # GUI variant: opens the windowed extractor with the selection queued.
+        $GuiMenuPath = "HKCU:\Software\Classes\SystemFileAssociations\$Ext\shell\ArchivePwExtractGui"
+        $GuiCommandPath = "$GuiMenuPath\command"
+
+        New-Item -Path $GuiMenuPath -Force | Out-Null
+        New-Item -Path $GuiCommandPath -Force | Out-Null
+
+        Set-ItemProperty -Path $GuiMenuPath -Name "(default)" -Value "Extract with GUI (password list)"
+        Set-ItemProperty -Path $GuiMenuPath -Name "MUIVerb" -Value "Extract with GUI (password list)"
+        Set-ItemProperty -Path $GuiMenuPath -Name "Icon" -Value "powershell.exe"
+
+        $GuiCommand = "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$HelperPath`" -Gui `"%1`""
+        Set-ItemProperty -Path $GuiCommandPath -Name "(default)" -Value $GuiCommand
+
         $registeredCount++
     } catch {
         $failedExtensions += $Ext
@@ -312,6 +330,20 @@ try {
 
     $FolderCommand = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$HelperPath`" `"%1`""
     Set-ItemProperty -Path $FolderCommandPath -Name "(default)" -Value $FolderCommand
+
+    # GUI variant for a right-clicked folder.
+    $FolderGuiMenuPath = "HKCU:\Software\Classes\Directory\shell\ArchivePwExtractFolderGui"
+    $FolderGuiCommandPath = "$FolderGuiMenuPath\command"
+
+    New-Item -Path $FolderGuiMenuPath -Force | Out-Null
+    New-Item -Path $FolderGuiCommandPath -Force | Out-Null
+
+    Set-ItemProperty -Path $FolderGuiMenuPath -Name "(default)" -Value "Extract archives with GUI (password list)"
+    Set-ItemProperty -Path $FolderGuiMenuPath -Name "MUIVerb" -Value "Extract archives with GUI (password list)"
+    Set-ItemProperty -Path $FolderGuiMenuPath -Name "Icon" -Value "powershell.exe"
+
+    $FolderGuiCommand = "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$HelperPath`" -Gui `"%1`""
+    Set-ItemProperty -Path $FolderGuiCommandPath -Name "(default)" -Value $FolderGuiCommand
 } catch {
     $folderMenuOk = $false
     Write-Host "  Warning: Failed to register folder context menu: $($_.Exception.Message)" -ForegroundColor Yellow
@@ -331,6 +363,20 @@ try {
 
     $BackgroundCommand = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$HelperPath`" `"%V`""
     Set-ItemProperty -Path $BackgroundCommandPath -Name "(default)" -Value $BackgroundCommand
+
+    # GUI variant for the folder background (empty space inside a folder).
+    $BackgroundGuiMenuPath = "HKCU:\Software\Classes\Directory\Background\shell\ArchivePwExtractHereGui"
+    $BackgroundGuiCommandPath = "$BackgroundGuiMenuPath\command"
+
+    New-Item -Path $BackgroundGuiMenuPath -Force | Out-Null
+    New-Item -Path $BackgroundGuiCommandPath -Force | Out-Null
+
+    Set-ItemProperty -Path $BackgroundGuiMenuPath -Name "(default)" -Value "Extract archives here with GUI (password list)"
+    Set-ItemProperty -Path $BackgroundGuiMenuPath -Name "MUIVerb" -Value "Extract archives here with GUI (password list)"
+    Set-ItemProperty -Path $BackgroundGuiMenuPath -Name "Icon" -Value "powershell.exe"
+
+    $BackgroundGuiCommand = "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$HelperPath`" -Gui `"%V`""
+    Set-ItemProperty -Path $BackgroundGuiCommandPath -Name "(default)" -Value $BackgroundGuiCommand
 } catch {
     $backgroundMenuOk = $false
     Write-Host "  Warning: Failed to register background context menu: $($_.Exception.Message)" -ForegroundColor Yellow
@@ -470,7 +516,8 @@ Write-Host ""
 Write-Host "  New in v$($AppVersion):" -ForegroundColor Cyan
 Write-Host "    - Recursive nested-archive extraction (set extractNestedArchives: true)"
 Write-Host "    - Modular architecture with separate module files"
-Write-Host "    - WPF GUI mode (set preferGui: true in config.json)"
+Write-Host "    - WPF GUI mode (set preferGui: true, or right-click -> 'Extract with GUI')"
+Write-Host "    - GUI opens with your selection queued; closes with a confirmation prompt"
 Write-Host "    - Parallel archive and password processing"
 Write-Host "    - Condensed logging (no more per-file wrong-password spam)"
 Write-Host "    - Error classification (wrong password vs corrupt vs timeout)"
