@@ -53,6 +53,57 @@ Describe 'Get-ArchiveBaseName' {
     }
 }
 
+Describe 'Convert-FolderNameWithRules / Get-ArchiveBaseName folderNameRules' {
+    It 'returns the name unchanged when no rules are configured' {
+        $FolderNameRules = @()
+        Convert-FolderNameWithRules 'Nomachi-Ankergames' | Should -Be 'Nomachi-Ankergames'
+    }
+
+    It 'removes a bare-string pattern (shorthand exclusion)' {
+        $FolderNameRules = @('-Ankergames$')
+        Convert-FolderNameWithRules 'Nomachi-Ankergames' | Should -Be 'Nomachi'
+    }
+
+    It 'applies a hashtable pattern/replacement rule' {
+        $FolderNameRules = @(@{ pattern = '-Ankergames$'; replacement = '' })
+        Convert-FolderNameWithRules 'Nomachi-Ankergames' | Should -Be 'Nomachi'
+    }
+
+    It 'supports a capture-group rewrite' {
+        $FolderNameRules = @(@{ pattern = '^Setup_(.+?)_v[\d.]+$'; replacement = '$1' })
+        Convert-FolderNameWithRules 'Setup_MyGame_v1.2' | Should -Be 'MyGame'
+    }
+
+    It 'applies multiple rules in order' {
+        $FolderNameRules = @('-Repack$', @{ pattern = '-Ankergames'; replacement = '' })
+        Convert-FolderNameWithRules 'Nomachi-Ankergames-Repack' | Should -Be 'Nomachi'
+    }
+
+    It 'is case-insensitive by default and case-sensitive when asked' {
+        $FolderNameRules = @('-ANKERGAMES$')
+        Convert-FolderNameWithRules 'Nomachi-ankergames' | Should -Be 'Nomachi'
+
+        $FolderNameRules = @(@{ pattern = '-ANKERGAMES$'; ignoreCase = $false })
+        Convert-FolderNameWithRules 'Nomachi-ankergames' | Should -Be 'Nomachi-ankergames'
+    }
+
+    It 'skips an invalid regex without throwing' {
+        $FolderNameRules = @('[unclosed')
+        { Convert-FolderNameWithRules 'Game' } | Should -Not -Throw
+        Convert-FolderNameWithRules 'Game' | Should -Be 'Game'
+    }
+
+    It 'flows through Get-ArchiveBaseName after the extension is stripped' {
+        $FolderNameRules = @('-Ankergames$')
+        Get-ArchiveBaseName 'C:\dl\Nomachi-Ankergames.zip' | Should -Be 'Nomachi'
+    }
+
+    It 'falls back to the default name when a rule empties the result' {
+        $FolderNameRules = @('.*')
+        Get-ArchiveBaseName 'C:\dl\Whatever.zip' | Should -Be 'Extracted'
+    }
+}
+
 Describe 'Test-IsFirstVolumeOrNormalArchive' {
     It 'treats only the first underscore-separated part as the entry' -ForEach @(
         @{ Name = 'X_part1.rar';   Expected = $true }

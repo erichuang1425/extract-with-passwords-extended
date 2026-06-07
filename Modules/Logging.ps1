@@ -171,6 +171,50 @@ function ConvertTo-WindowsCommandLineArg {
     return $sb.ToString()
 }
 
+function Get-EngineProcessPriorityClass {
+    # Map the configured EngineProcessPriority string to a ProcessPriorityClass.
+    # Returns $null when no (or an unrecognized) priority is configured, so the
+    # caller leaves the OS default in place. Test-ConfigSane normally validates
+    # the value first; this stays defensive for direct/parallel-worker use.
+    # $EngineProcessPriority resolves via dynamic scope (set at script scope in
+    # normal runs and re-hydrated into the worker scope in parallel runs), the
+    # same convention used by every other config reference in these modules.
+    if ([string]::IsNullOrWhiteSpace([string]$EngineProcessPriority)) {
+        return $null
+    }
+
+    switch (([string]$EngineProcessPriority).Trim().ToLowerInvariant()) {
+        "idle"        { return [System.Diagnostics.ProcessPriorityClass]::Idle }
+        "belownormal" { return [System.Diagnostics.ProcessPriorityClass]::BelowNormal }
+        "normal"      { return [System.Diagnostics.ProcessPriorityClass]::Normal }
+        "abovenormal" { return [System.Diagnostics.ProcessPriorityClass]::AboveNormal }
+        "high"        { return [System.Diagnostics.ProcessPriorityClass]::High }
+        default       { return $null }
+    }
+}
+
+function Set-EngineProcessPriority {
+    # Best-effort lowering (or raising) of a freshly-started engine process so a
+    # long extraction does not starve interactive apps and downloads. Never
+    # throws: a process that exits instantly can no longer be adjusted, which is
+    # harmless.
+    param([System.Diagnostics.Process]$Process)
+
+    $priority = Get-EngineProcessPriorityClass
+    if ($null -eq $priority) { return }
+
+    try {
+        $Process.PriorityClass = $priority
+        # One log line per engine process would be very noisy (every password
+        # attempt spawns one), so only record success under verbose logging.
+        if ($VerboseEngineLogging) {
+            Write-Log "Engine process priority set to $priority"
+        }
+    } catch {
+        Write-Log "Could not set engine process priority to $priority : $($_.Exception.Message)" "WARN"
+    }
+}
+
 function Invoke-ProcessLogged {
     param(
         [string]$Exe,
@@ -214,6 +258,11 @@ function Invoke-ProcessLogged {
         $p.StartInfo = $psi
 
         [void]$p.Start()
+
+        # Apply the configured priority immediately so heavy work (which starts
+        # right away) runs at the chosen level rather than fighting for resources
+        # at normal priority first.
+        Set-EngineProcessPriority -Process $p
 
         $stdoutTask = $p.StandardOutput.ReadToEndAsync()
         $stderrTask = $p.StandardError.ReadToEndAsync()

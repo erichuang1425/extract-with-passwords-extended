@@ -68,6 +68,32 @@ Describe 'Write-Log resilience' {
     }
 }
 
+Describe 'Get-EngineProcessPriorityClass' {
+    It 'maps each valid (case-insensitive) name to its ProcessPriorityClass' {
+        $cases = @{
+            'idle'        = [System.Diagnostics.ProcessPriorityClass]::Idle
+            'BelowNormal' = [System.Diagnostics.ProcessPriorityClass]::BelowNormal
+            'NORMAL'      = [System.Diagnostics.ProcessPriorityClass]::Normal
+            'aboveNormal' = [System.Diagnostics.ProcessPriorityClass]::AboveNormal
+            'High'        = [System.Diagnostics.ProcessPriorityClass]::High
+        }
+        foreach ($name in $cases.Keys) {
+            $EngineProcessPriority = $name
+            Get-EngineProcessPriorityClass | Should -Be $cases[$name]
+        }
+    }
+
+    It 'returns $null when unset (leave OS default in place)' {
+        $EngineProcessPriority = ''
+        Get-EngineProcessPriorityClass | Should -BeNullOrEmpty
+    }
+
+    It 'returns $null for an unrecognized value' {
+        $EngineProcessPriority = 'turbo'
+        Get-EngineProcessPriorityClass | Should -BeNullOrEmpty
+    }
+}
+
 Describe 'Merge-WorkerLogs' {
     It 'appends worker logs into the main log and removes the worker files' {
         $main = Join-Path $TestDrive 'run.log'

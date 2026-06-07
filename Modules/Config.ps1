@@ -51,6 +51,24 @@ $ExtractNestedArchives = $false
 $MaxNestedDepth = 1
 $DeleteNestedArchiveAfterExtract = $false
 
+# Priority class given to each extraction engine process (7z / WinRAR / UnRAR).
+# Lowering it keeps the system responsive — browsers, downloads, and other apps
+# competing for CPU and disk are no longer starved by a busy extraction.
+# Valid: "Idle" | "BelowNormal" | "Normal" | "AboveNormal" | "High".
+# "Idle" also drops the engine to background disk-I/O priority on Windows, which
+# is the gentlest setting when something else (e.g. a download) is writing to the
+# same drive/path.
+$EngineProcessPriority = "BelowNormal"
+
+# Optional rename rules applied to the auto-derived output folder name (after the
+# archive extension is stripped, before the name is sanitized). Each rule is a
+# regex search/replace, letting the user exclude or rewrite parts of the name —
+# e.g. turn "Nomachi-Ankergames.zip" into a "Nomachi" folder. Each entry is
+# either a plain string (a regex pattern that is simply removed) or an object
+# { "pattern": "...", "replacement": "...", "ignoreCase": true }. Rules apply in
+# order; an empty/whitespace result falls back to the sanitizer's default.
+$FolderNameRules = @()
+
 # Prompt each run to choose how existing extracted folders are handled.
 $AskOutputBehavior = $true
 # What to do with the original source archives after a run:
@@ -139,6 +157,17 @@ function Test-ConfigSane {
         Write-Host "[!] Config 'winRarOverwriteMode'='$rarMode' invalid (expected -o+|-o-|-or); resetting to '-o+'." -ForegroundColor Yellow
         Set-Variable -Name "WinRarOverwriteMode" -Value "-o+" -Scope Script
     }
+
+    $validPriorities = @("Idle", "BelowNormal", "Normal", "AboveNormal", "High")
+    $priority = Get-Variable -Name "EngineProcessPriority" -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+    $matchedPriority = $validPriorities | Where-Object { $_ -ieq [string]$priority } | Select-Object -First 1
+    if ($matchedPriority) {
+        # Normalize casing so downstream comparisons/enum parsing are exact.
+        Set-Variable -Name "EngineProcessPriority" -Value $matchedPriority -Scope Script
+    } else {
+        Write-Host "[!] Config 'engineProcessPriority'='$priority' invalid (expected Idle|BelowNormal|Normal|AboveNormal|High); resetting to 'BelowNormal'." -ForegroundColor Yellow
+        Set-Variable -Name "EngineProcessPriority" -Value "BelowNormal" -Scope Script
+    }
 }
 
 function Read-Config {
@@ -189,6 +218,8 @@ function Read-Config {
             "postExtractionAction" = "PostExtractionAction"
             "postExtractionSilent" = "PostExtractionSilent"
             "preventSleepDuringExtraction" = "PreventSleepDuringExtraction"
+            "engineProcessPriority" = "EngineProcessPriority"
+            "folderNameRules" = "FolderNameRules"
         }
 
         foreach ($jsonKey in $map.Keys) {
