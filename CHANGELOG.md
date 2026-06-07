@@ -29,6 +29,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`-ibck`).
 
 ### Added
+- **The Explorer right-click menu now opens the GUI by default.** *"Extract with
+  password list"* (on archive files, folders, and folder backgrounds) launches the
+  windowed extractor with the right-clicked selection already queued; *"Extract in
+  console (password list)"* is the secondary text-mode entry. The GUI is started
+  through a tiny windowless `LaunchGui.vbs` shim so PowerShell runs **fully hidden** —
+  no flashing console window. The orchestrator gained a `-Gui` switch that forces GUI
+  mode regardless of `preferGui`, and the GUI accepts the launch selection instead of
+  always opening empty.
+
+### Fixed
+- **A context-menu launch no longer just flashes a terminal and vanishes.** Module
+  loading and `Read-Config` run before the orchestrator's main `try/catch`, so an
+  early failure (e.g. a half-updated install) used to close the console instantly
+  with no message. A script-level `trap` now catches those errors and either pauses
+  the console ("Press Enter to close") or, in hidden GUI mode, shows an error dialog.
+  The new launch/window design is documented in
+  `docs/launch-and-window-lifecycle.md`.
+- **GUI usability pass.** The archive list has a right-click context menu (open
+  output folder, open file location, copy the recovered password, copy the archive
+  path, remove from list), supports multi-select and a **Remove** button, opens a
+  row's output folder on double-click, dedupes archives added more than once,
+  keeps the index column renumbered, shows a live count, and adds an **Edit
+  Passwords** button. The live log is now capped so very large batches don't bloat
+  the UI, and the add/remove/clear controls are disabled while a run is in flight.
+- **Close confirmation for the GUI** (`confirmGuiClose`, default `true`): closing
+  the window asks first when archives are queued, and a close mid-run prompts before
+  cancelling the in-flight extraction — so a stray click never silently discards a
+  run or its results.
 - **Choose how existing output is handled, each run** (`askOutputBehavior`): a
   prompt to overwrite, keep both (new `_2`/`_3` folder), or merge & skip duplicate
   files.
