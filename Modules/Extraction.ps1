@@ -439,10 +439,22 @@ function Try-EnginePassword {
         # outer layer in place rather than clearing it.
         if ((Test-IsCompoundTarArchive $Archive) -and
             -not (Expand-CompoundTarResidue -EngineName $EngineName -EnginePath $EnginePath -OutputDir $OutputDir -SourceArchive $Archive -Timeout $Timeout -CancelToken $CancelToken)) {
-            Write-Log "Compound-tar archive only partially extracted (intermediate tarball not expanded): $Archive" "WARN"
-            return $false
+            if ($CancelToken.IsCancellationRequested) {
+                # Skip/Cancel interrupted the intermediate-tarball expansion. Treat
+                # this like any other cancelled attempt: fall through to the normal
+                # failed-attempt cleanup so the outer .tar and partial files are
+                # cleared, instead of leaving a half-extracted result behind.
+                Write-Log "Compound-tar extraction cancelled before the intermediate tarball was expanded: $Archive" "WARN"
+                $extractOk = $false
+            } else {
+                # Genuine partial extraction: report not-fully-extracted but keep
+                # the recovered outer layer in place rather than clearing it.
+                Write-Log "Compound-tar archive only partially extracted (intermediate tarball not expanded): $Archive" "WARN"
+                return $false
+            }
+        } else {
+            return $true
         }
-        return $true
     }
 
     if ($CleanFailedAttemptOutput -and $CanClearFailedOutput) {
