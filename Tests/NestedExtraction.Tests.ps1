@@ -1,0 +1,74 @@
+# NestedExtraction.Tests.ps1 — unit tests for recursive nested extraction orchestration.
+
+BeforeAll {
+    . (Join-Path $PSScriptRoot 'TestHelpers.ps1')
+    . $ProductionModule['NestedExtraction']
+
+    function Write-Status { param($Message, $Kind) }
+    function Write-Log { param($Message, $Level) }
+    function Find-NestedArchives { param($Root) }
+    function Test-DirectoryHasExecutable { param($Dir) }
+    function Get-EnginePlanForArchive { param($Archive, $SevenZip, $PeaZip7z, $WinRar) }
+    function Get-ArchiveBaseName { param($Path) }
+    function Resolve-OutputDir { param($BaseDir, $IsSharedOutput, $BehaviorOverride) }
+    function Test-IsEncryptionCapable { param($Path) }
+    function Get-PasswordTryOrder { param($Passwords, $PreferredFirst) }
+    function Try-EnginePassword { param($EngineName, $EnginePath, $Archive, $Password, $OutputDir, $CanClearFailedOutput, $OmitPasswordArg, $Timeout, $TestOnly, $CancelToken) }
+    function Save-PasswordToCache { param($Password) }
+    function Remove-EmptyOutputDir { param($OutputDir, $SeparateFolders) }
+    function Get-LastEngineFailureType { param($ArchiveKnownEncrypted) }
+
+    $script:DeleteNestedArchiveAfterExtract = $false
+}
+
+Describe 'Invoke-NestedExtractionPass cancellation' {
+    BeforeEach {
+        $script:observedCancelToken = $null
+
+        Mock Find-NestedArchives { return @('C:/seed/inner.zip') }
+        Mock Test-DirectoryHasExecutable { return $false }
+        Mock Get-EnginePlanForArchive { return @(@{ Name = '7-Zip'; Path = 'C:/7z.exe' }) }
+        Mock Get-ArchiveBaseName { return 'inner' }
+        Mock Resolve-OutputDir { return 'C:/seed/inner' }
+        Mock Test-IsEncryptionCapable { return $false }
+        Mock Try-EnginePassword {
+            $script:observedCancelToken = $CancelToken
+            return $true
+        }
+    }
+
+    It 'forwards the cancellation token into nested engine attempts' {
+        $cts = New-Object System.Threading.CancellationTokenSource
+
+        $results = @(Invoke-NestedExtractionPass `
+            -SeedFolders @('C:/seed') `
+            -Passwords @('pw') `
+            -SevenZip 'C:/7z.exe' `
+            -PeaZip7z $null `
+            -WinRar $null `
+            -MaxDepth 1 `
+            -Timeout 12 `
+            -CancelToken $cts.Token)
+
+        $results.Count | Should -Be 1
+        $script:observedCancelToken | Should -Be $cts.Token
+    }
+
+    It 'stops before scanning queued folders once cancellation is requested' {
+        $cts = New-Object System.Threading.CancellationTokenSource
+        $cts.Cancel()
+
+        $results = @(Invoke-NestedExtractionPass `
+            -SeedFolders @('C:/seed') `
+            -Passwords @('pw') `
+            -SevenZip 'C:/7z.exe' `
+            -PeaZip7z $null `
+            -WinRar $null `
+            -MaxDepth 1 `
+            -CancelToken $cts.Token)
+
+        $results.Count | Should -Be 0
+        Should -Invoke Find-NestedArchives -Times 0 -Exactly
+        Should -Invoke Try-EnginePassword -Times 0 -Exactly
+    }
+}

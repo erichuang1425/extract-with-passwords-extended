@@ -28,5 +28,6 @@ $ProductionModule = @{
     ArchiveUtils    = Join-Path $ModulesDir 'ArchiveUtils.ps1'
     Passwords       = Join-Path $ModulesDir 'Passwords.ps1'
     Extraction      = Join-Path $ModulesDir 'Extraction.ps1'
+    NestedExtraction = Join-Path $ModulesDir 'NestedExtraction.ps1'
     PowerManagement = Join-Path $ModulesDir 'PowerManagement.ps1'
 }
