@@ -239,6 +239,7 @@ function Invoke-ProcessLogged {
 
     $output = @()
     $exitCode = -999
+    $p = $null
 
     try {
         $psi = New-Object System.Diagnostics.ProcessStartInfo
@@ -321,6 +322,18 @@ function Invoke-ProcessLogged {
     } catch {
         $exitCode = -999
         $output = @($_.Exception.ToString())
+    } finally {
+        # Dispose the process so its handle and the three redirected pipe handles
+        # (stdin/stdout/stderr) are released immediately. Without this, every
+        # password test / extraction / encryption probe leaks those handles —
+        # and the stdout/stderr pipes stay bound to the ThreadPool I/O completion
+        # port via ReadToEndAsync — until the finalizer eventually runs. Across a
+        # batch the engine spawns hundreds of processes, so the leak accumulates
+        # faster than finalization and extraction wedges after a couple dozen
+        # archives. Disposing here keeps the handle count flat.
+        if ($p) {
+            try { $p.Dispose() } catch {}
+        }
     }
 
     Write-Log "Exit code: $exitCode"

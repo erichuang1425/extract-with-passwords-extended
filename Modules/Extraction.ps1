@@ -106,6 +106,7 @@ function Test-EngineWorks {
         return (Test-Path -LiteralPath $EnginePath)
     }
 
+    $p = $null
     try {
         $psi = New-Object System.Diagnostics.ProcessStartInfo
         $psi.FileName = $EnginePath
@@ -134,6 +135,12 @@ function Test-EngineWorks {
         return ($p.ExitCode -ne -999)
     } catch {
         return $false
+    } finally {
+        # Release the process handle and the redirected stdin/stdout/stderr pipes
+        # rather than waiting on the finalizer (see Invoke-ProcessLogged).
+        if ($p) {
+            try { $p.Dispose() } catch {}
+        }
     }
 }
 
