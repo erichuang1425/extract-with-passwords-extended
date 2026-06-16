@@ -750,13 +750,14 @@ function Move-ArchiveSet {
 function Test-ArchiveIsEncrypted {
     param(
         [string]$Archive,
-        [string]$SevenZipPath
+        [string]$SevenZipPath,
+        [System.Threading.CancellationToken]$CancelToken = [System.Threading.CancellationToken]::None
     )
 
     if (-not $SevenZipPath) { return $null }
 
     try {
-        $result = Invoke-ProcessLogged -Exe $SevenZipPath -ArgumentList @("l", "-slt", $Archive) -Operation "ENCRYPTION CHECK" -ShowOutput $false -TimeoutSeconds 30 -CondenseOutput $true
+        $result = Invoke-ProcessLogged -Exe $SevenZipPath -ArgumentList @("l", "-slt", $Archive) -Operation "ENCRYPTION CHECK" -ShowOutput $false -TimeoutSeconds 30 -CondenseOutput $true -CancelToken $CancelToken
         if ($result.ExitCode -ne 0 -and $result.ExitCode -ne 2) { return $null }
 
         $hasEncrypted = $false
