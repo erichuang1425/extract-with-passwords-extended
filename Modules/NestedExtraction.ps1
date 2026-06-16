@@ -28,7 +28,8 @@ function Invoke-NestedExtractionPass {
         [string]$WinRar,
         [int]$MaxDepth = 1,
         [int]$Timeout = 0,
-        [string]$InitialLastPassword = $null
+        [string]$InitialLastPassword = $null,
+        [System.Threading.CancellationToken]$CancelToken = [System.Threading.CancellationToken]::None
     )
 
     $results = New-Object System.Collections.Generic.List[object]
@@ -46,6 +47,11 @@ function Invoke-NestedExtractionPass {
     }
 
     while ($queue.Count -gt 0) {
+        if ($CancelToken.IsCancellationRequested) {
+            Write-Log "Nested extraction cancelled before scanning next queued folder." "WARN"
+            break
+        }
+
         $item = $queue.Dequeue()
         $folder = $item.Folder
         $depth = [int]$item.Depth
@@ -68,6 +74,11 @@ function Invoke-NestedExtractionPass {
         }
 
         foreach ($archive in $nested) {
+            if ($CancelToken.IsCancellationRequested) {
+                Write-Log "Nested extraction cancelled before processing remaining archives in $folder." "WARN"
+                break
+            }
+
             $archiveKey = Get-NormalizedPathKey $archive
             if ($archiveKey -and $visitedArchives.ContainsKey($archiveKey)) { continue }
             if ($archiveKey) { $visitedArchives[$archiveKey] = $true }
@@ -116,7 +127,10 @@ function Invoke-NestedExtractionPass {
             $winEngine = $null
 
             foreach ($pw in $tryList) {
+                if ($CancelToken.IsCancellationRequested) { break }
+
                 foreach ($engine in $enginePlan) {
+                    if ($CancelToken.IsCancellationRequested) { break }
                     $ok = Try-EnginePassword `
                         -EngineName $engine.Name `
                         -EnginePath $engine.Path `
@@ -126,7 +140,8 @@ function Invoke-NestedExtractionPass {
                         -CanClearFailedOutput $true `
                         -OmitPasswordArg (-not $isEncryptable) `
                         -Timeout $Timeout `
-                        -TestOnly:$false
+                        -TestOnly:$false `
+                        -CancelToken $CancelToken
 
                     if ($ok) {
                         $winPw = $pw
