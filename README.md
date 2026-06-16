@@ -25,6 +25,7 @@ Windows context-menu tool for extracting encrypted archives using a password lis
 - **Interactive browse interface** — file/folder browser when launched without arguments
 - **Toast notifications** — Windows notification when batch extraction completes
 - **Mid-extraction skip** — stop the active engine process and continue with the next queued archive from the GUI
+- **Console-equivalent start choices** — the GUI honors the same pre-extraction prompts for confirmation, output directory, separate vs. shared output folders, and existing-folder behavior
 
 ### Performance
 - **Parallel archive processing** — process multiple archives concurrently via runspace pools
