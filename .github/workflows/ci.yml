@@ -18,10 +18,16 @@ jobs:
 
       - name: Install PSScriptAnalyzer
         run: |
+          $ErrorActionPreference = 'Stop'
+          [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+          # Bootstrap the NuGet provider first so Register/Set-PSRepository don't
+          # shell out to the flaky legacy nuget.exe path that intermittently fails
+          # with "Missing option value for: '-source'" on the hosted runners.
+          Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force | Out-Null
           if (-not (Get-PSRepository -Name PSGallery -ErrorAction SilentlyContinue)) {
-            Register-PSRepository -Default
+            Register-PSRepository -Default -ErrorAction SilentlyContinue
           }
-          Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+          Set-PSRepository -Name PSGallery -InstallationPolicy Trusted -ErrorAction SilentlyContinue
           if (-not (Get-Module -ListAvailable PSScriptAnalyzer)) {
             Install-Module PSScriptAnalyzer -Force -Scope CurrentUser
           }
@@ -53,10 +59,16 @@ jobs:
 
       - name: Install Pester
         run: |
+          $ErrorActionPreference = 'Stop'
+          [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+          # Bootstrap the NuGet provider first so Register/Set-PSRepository don't
+          # shell out to the flaky legacy nuget.exe path that intermittently fails
+          # with "Missing option value for: '-source'" on the hosted runners.
+          Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force | Out-Null
           if (-not (Get-PSRepository -Name PSGallery -ErrorAction SilentlyContinue)) {
-            Register-PSRepository -Default
+            Register-PSRepository -Default -ErrorAction SilentlyContinue
           }
-          Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+          Set-PSRepository -Name PSGallery -InstallationPolicy Trusted -ErrorAction SilentlyContinue
           if (-not (Get-Module -ListAvailable Pester | Where-Object { $_.Version -ge [version]'5.0.0' })) {
             Install-Module Pester -MinimumVersion 5.5.0 -Force -SkipPublisherCheck -Scope CurrentUser
           }
