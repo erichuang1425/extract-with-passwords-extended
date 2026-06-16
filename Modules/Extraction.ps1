@@ -312,7 +312,8 @@ function Expand-CompoundTarResidue {
         [string]$EnginePath,
         [string]$OutputDir,
         [string]$SourceArchive,
-        [int]$Timeout = 0
+        [int]$Timeout = 0,
+        [System.Threading.CancellationToken]$CancelToken = [System.Threading.CancellationToken]::None
     )
 
     if (-not (Test-Path -LiteralPath $OutputDir)) { return $true }
@@ -348,12 +349,12 @@ function Expand-CompoundTarResidue {
 
     $ok = $false
     if ($EngineName -eq "7-Zip" -or $EngineName -eq "PeaZip bundled 7z") {
-        $ok = Extract-With7z -SevenZip $EnginePath -Archive $tar -Password "" -OutputDir $OutputDir -OmitPasswordIfEmpty $true -Timeout $Timeout
+        $ok = Extract-With7z -SevenZip $EnginePath -Archive $tar -Password "" -OutputDir $OutputDir -OmitPasswordIfEmpty $true -Timeout $Timeout -CancelToken $CancelToken
     } elseif ($EngineName -eq "WinRAR") {
         # The console UnRAR/Rar binaries cannot read a plain .tar; only the
         # universal WinRAR.exe can. (A real .tar.zst would never have been opened
         # by UnRAR/Rar in the first place, so they never reach this path.)
-        $ok = Extract-WithWinRar -RarExe $EnginePath -Archive $tar -Password "" -OutputDir $OutputDir -Timeout $Timeout
+        $ok = Extract-WithWinRar -RarExe $EnginePath -Archive $tar -Password "" -OutputDir $OutputDir -Timeout $Timeout -CancelToken $CancelToken
     } else {
         Write-Log "Engine $EngineName cannot extract the intermediate tarball; leaving $tar in place." "WARN"
         return $false
@@ -396,7 +397,11 @@ function Try-EnginePassword {
     if ($EngineName -eq "7-Zip" -or $EngineName -eq "PeaZip bundled 7z") {
         $testOk = Test-With7z -SevenZip $EnginePath -Archive $Archive -Password $Password -OmitPasswordIfEmpty $OmitPasswordArg -Timeout $Timeout -CancelToken $CancelToken
 
-        if (-not $TestOnly) {
+        # If the test was cancelled (Skip Current/Cancel), don't launch a fallback
+        # extraction with an already-canceled token: that would start a second
+        # engine process after the user asked to stop, delaying the skip and
+        # possibly leaving partial files where failed-attempt cleanup is disabled.
+        if (-not $TestOnly -and -not $CancelToken.IsCancellationRequested) {
             if ($testOk -or $TryExtractEvenIfTestFails) {
                 if (-not $testOk) {
                     Write-Log "$EngineName test failed; trying extraction fallback anyway." "WARN"
@@ -408,7 +413,7 @@ function Try-EnginePassword {
     } elseif ($EngineName -in @("WinRAR", "UnRAR", "Rar")) {
         $testOk = Test-WithWinRar -RarExe $EnginePath -Archive $Archive -Password $Password -Timeout $Timeout -CancelToken $CancelToken
 
-        if (-not $TestOnly) {
+        if (-not $TestOnly -and -not $CancelToken.IsCancellationRequested) {
             if ($testOk -or $TryExtractEvenIfTestFails) {
                 if (-not $testOk) {
                     Write-Log "$EngineName test failed; trying extraction fallback anyway." "WARN"
@@ -433,7 +438,7 @@ function Try-EnginePassword {
         # source as fully done (and delete/sort it), while leaving the recovered
         # outer layer in place rather than clearing it.
         if ((Test-IsCompoundTarArchive $Archive) -and
-            -not (Expand-CompoundTarResidue -EngineName $EngineName -EnginePath $EnginePath -OutputDir $OutputDir -SourceArchive $Archive -Timeout $Timeout)) {
+            -not (Expand-CompoundTarResidue -EngineName $EngineName -EnginePath $EnginePath -OutputDir $OutputDir -SourceArchive $Archive -Timeout $Timeout -CancelToken $CancelToken)) {
             Write-Log "Compound-tar archive only partially extracted (intermediate tarball not expanded): $Archive" "WARN"
             return $false
         }

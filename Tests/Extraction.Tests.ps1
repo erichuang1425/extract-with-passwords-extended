@@ -76,6 +76,47 @@ Describe 'Get-LastEngineFailureType' {
     }
 }
 
+Describe 'Try-EnginePassword cancellation guard' {
+    BeforeAll {
+        # Try-EnginePassword logs via Write-Log and consults the global
+        # $TryExtractEvenIfTestFails / $CleanFailedAttemptOutput switches.
+        function Write-Log { param($Message, $Level) }
+        $script:TryExtractEvenIfTestFails = $true
+        $script:CleanFailedAttemptOutput = $false
+    }
+
+    It 'does not start a fallback 7z extraction when the token is already cancelled' {
+        $cts = New-Object System.Threading.CancellationTokenSource
+        $cts.Cancel()
+
+        # Simulate the test process being killed by the cancel/skip token.
+        Mock Test-With7z { return $false }
+        Mock Extract-With7z { return $true }
+
+        $result = Try-EnginePassword -EngineName '7-Zip' -EnginePath 'C:/7-Zip/7z.exe' `
+            -Archive 'a.7z' -Password 'x' -OutputDir 'C:/out' -CanClearFailedOutput $false `
+            -Timeout 0 -CancelToken $cts.Token
+
+        $result | Should -BeFalse
+        Should -Invoke Extract-With7z -Times 0 -Exactly
+    }
+
+    It 'does not start a fallback WinRAR extraction when the token is already cancelled' {
+        $cts = New-Object System.Threading.CancellationTokenSource
+        $cts.Cancel()
+
+        Mock Test-WithWinRar { return $false }
+        Mock Extract-WithWinRar { return $true }
+
+        $result = Try-EnginePassword -EngineName 'WinRAR' -EnginePath 'C:/WinRAR/WinRAR.exe' `
+            -Archive 'a.rar' -Password 'x' -OutputDir 'C:/out' -CanClearFailedOutput $false `
+            -Timeout 0 -CancelToken $cts.Token
+
+        $result | Should -BeFalse
+        Should -Invoke Extract-WithWinRar -Times 0 -Exactly
+    }
+}
+
 Describe 'Get-EngineName' {
     It 'maps engine executables to display names' -ForEach @(
         @{ Path = 'C:/WinRAR/UnRAR.exe'; Expected = 'UnRAR' }
