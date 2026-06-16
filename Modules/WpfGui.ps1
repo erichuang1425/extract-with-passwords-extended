@@ -14,6 +14,27 @@ function Show-ExtractionGui {
     Add-Type -AssemblyName WindowsBase
     Add-Type -AssemblyName System.Windows.Forms
 
+    # PowerShell script blocks that are converted to .NET delegates (WPF event
+    # handlers, Dispatcher callbacks, and BackgroundWorker callbacks) require a
+    # runspace on the thread that invokes them. WPF/BackgroundWorker may invoke
+    # those delegates on dispatcher or thread-pool threads where PowerShell has
+    # not installed one, which produces the runtime error "There is no Runspace
+    # available to run scripts in this thread." Capture the GUI runspace and
+    # explicitly make it the default for callback threads before any script block
+    # work runs.
+    $guiRunspace = [System.Management.Automation.Runspaces.Runspace]::DefaultRunspace
+    if (-not $guiRunspace) {
+        $guiRunspace = [runspacefactory]::CreateRunspace()
+        $guiRunspace.ApartmentState = [System.Threading.ApartmentState]::STA
+        $guiRunspace.Open()
+        [System.Management.Automation.Runspaces.Runspace]::DefaultRunspace = $guiRunspace
+    }
+    $ensureGuiRunspace = {
+        if (-not [System.Management.Automation.Runspaces.Runspace]::DefaultRunspace) {
+            [System.Management.Automation.Runspaces.Runspace]::DefaultRunspace = $guiRunspace
+        }
+    }
+
     $xamlPath = Join-Path (Split-Path $ModulesDir -Parent) "Resources\MainWindow.xaml"
     if (-not (Test-Path -LiteralPath $xamlPath)) {
         Write-Status "GUI XAML not found at $xamlPath" "fail"
@@ -80,6 +101,7 @@ function Show-ExtractionGui {
     $appendLog = {
         param([string]$msg)
         $window.Dispatcher.Invoke([Action]{
+            & $ensureGuiRunspace
             $txtLog.Text += "$msg`n"
             # Cap the buffer so very large batches don't bloat the UI text block.
             if ($txtLog.Text.Length -gt 60000) {
@@ -470,6 +492,7 @@ function Show-ExtractionGui {
 
         $worker.Add_DoWork({
             param($s, $e)
+            & $ensureGuiRunspace
             $workArgs = $e.Argument
             $items = $workArgs.Items
             $token = $workArgs.CancelToken
@@ -603,6 +626,7 @@ function Show-ExtractionGui {
 
         $worker.Add_ProgressChanged({
             param($s, $e)
+            & $ensureGuiRunspace
             $data = $e.UserState
             switch ($data.Type) {
                 "CurrentSkipSource" {
@@ -643,6 +667,7 @@ function Show-ExtractionGui {
 
         $worker.Add_RunWorkerCompleted({
             param($s, $e)
+            & $ensureGuiRunspace
             $state.IsRunning = $false
             $btnStart.IsEnabled = $true
             $btnCancel.IsEnabled = $false
