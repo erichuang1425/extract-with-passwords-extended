@@ -43,6 +43,7 @@ function Show-ExtractionGui {
     $svLog = $window.FindName("svLog")
     $btnStart = $window.FindName("btnStart")
     $btnCancel = $window.FindName("btnCancel")
+    $btnSkip = $window.FindName("btnSkip")
     $btnOpenOutput = $window.FindName("btnOpenOutput")
 
     # MenuItems inside a ContextMenu sit in their own WPF namescope, so
@@ -72,6 +73,7 @@ function Show-ExtractionGui {
     $state = @{
         IsRunning = $false
         CancelSource = $null
+        SkipSource = $null
         OutputFolders = @()
     }
 
@@ -284,6 +286,7 @@ function Show-ExtractionGui {
         $state.OutputFolders = @()
         $btnStart.IsEnabled = $false
         $btnCancel.IsEnabled = $true
+        $btnSkip.IsEnabled = $true
         $btnOpenOutput.IsEnabled = $false
         $btnAddFiles.IsEnabled = $false
         $btnAddFolder.IsEnabled = $false
@@ -314,6 +317,14 @@ function Show-ExtractionGui {
                 if ($token.IsCancellationRequested) { break }
 
                 $archive = $items[$i]
+                $skipSource = New-Object System.Threading.CancellationTokenSource
+                # Marshal the per-archive cancellation source through
+                # BackgroundWorker's normal progress channel. Invoking a
+                # PowerShell script block directly on Dispatcher/worker threads
+                # can fail because those threads do not own a PowerShell
+                # runspace ("There is no Runspace available...").
+                $s.ReportProgress(0, @{ Type = "CurrentSkipSource"; Source = $skipSource })
+                $attemptToken = $skipSource.Token
                 $sw = [System.Diagnostics.Stopwatch]::StartNew()
 
                 $s.ReportProgress(0, @{ Type = "Status"; Index = $i; Text = "Testing..."; Overall = [math]::Floor(($i / $items.Count) * 100) })
@@ -322,6 +333,8 @@ function Show-ExtractionGui {
                 if ($enginePlan.Count -eq 0) {
                     $sw.Stop()
                     $s.ReportProgress(0, @{ Type = "Result"; Index = $i; Status = "No Engine"; Password = ""; RealPassword = ""; Time = (Format-Elapsed $sw) })
+                    $s.ReportProgress(0, @{ Type = "CurrentSkipSource"; Source = $null })
+                    $skipSource.Dispose()
                     $failed++
                     continue
                 }
@@ -341,7 +354,8 @@ function Show-ExtractionGui {
 
                 if (-not $isEncryptable) {
                     foreach ($engine in $enginePlan) {
-                        $ok = Try-EnginePassword -EngineName $engine.Name -EnginePath $engine.Path -Archive $archive -Password "" -OutputDir $outputDir -CanClearFailedOutput $true -OmitPasswordArg $true -Timeout $ExtractionTimeoutSeconds
+                        $ok = Try-EnginePassword -EngineName $engine.Name -EnginePath $engine.Path -Archive $archive -Password "" -OutputDir $outputDir -CanClearFailedOutput $true -OmitPasswordArg $true -Timeout $ExtractionTimeoutSeconds -CancelToken $attemptToken
+                        if ($attemptToken.IsCancellationRequested) { break }
                         if ($ok) {
                             $sw.Stop()
                             $s.ReportProgress(0, @{ Type = "Result"; Index = $i; Status = "Success"; Password = "(none)"; RealPassword = ""; Time = (Format-Elapsed $sw); OutputDir = $outputDir })
@@ -360,9 +374,10 @@ function Show-ExtractionGui {
                         $s.ReportProgress(0, @{ Type = "Password"; Index = $i; Current = $pwIndex; Total = $passwords.Count; Pct = $currentPct })
 
                         foreach ($engine in $enginePlan) {
-                            $testOk = Try-EnginePassword -EngineName $engine.Name -EnginePath $engine.Path -Archive $archive -Password $pw -OutputDir $outputDir -CanClearFailedOutput $true -Timeout $ExtractionTimeoutSeconds -TestOnly $true
+                            $testOk = Try-EnginePassword -EngineName $engine.Name -EnginePath $engine.Path -Archive $archive -Password $pw -OutputDir $outputDir -CanClearFailedOutput $true -Timeout $ExtractionTimeoutSeconds -TestOnly $true -CancelToken $attemptToken
+                            if ($attemptToken.IsCancellationRequested) { break }
                             if ($testOk) {
-                                $extractOk = Try-EnginePassword -EngineName $engine.Name -EnginePath $engine.Path -Archive $archive -Password $pw -OutputDir $outputDir -CanClearFailedOutput $true -Timeout $ExtractionTimeoutSeconds -TestOnly $false
+                                $extractOk = Try-EnginePassword -EngineName $engine.Name -EnginePath $engine.Path -Archive $archive -Password $pw -OutputDir $outputDir -CanClearFailedOutput $true -Timeout $ExtractionTimeoutSeconds -TestOnly $false -CancelToken $attemptToken
                                 if ($extractOk) {
                                     $sw.Stop()
                                     $masked = Format-MaskedPassword $pw
@@ -374,16 +389,22 @@ function Show-ExtractionGui {
                                 }
                             }
                         }
-                        if ($found) { break }
+                        if ($found -or $attemptToken.IsCancellationRequested) { break }
                     }
                 }
 
-                if (-not $found) {
+                if ($attemptToken.IsCancellationRequested) {
+                    $sw.Stop()
+                    $s.ReportProgress(0, @{ Type = "Result"; Index = $i; Status = "Skipped"; Password = ""; RealPassword = ""; Time = (Format-Elapsed $sw) })
+                    Remove-EmptyOutputDir -OutputDir $outputDir -SeparateFolders $true
+                } elseif (-not $found) {
                     $sw.Stop()
                     $s.ReportProgress(0, @{ Type = "Result"; Index = $i; Status = "Failed"; Password = ""; RealPassword = ""; Time = (Format-Elapsed $sw) })
                     Remove-EmptyOutputDir -OutputDir $outputDir -SeparateFolders $true
                     $failed++
                 }
+                $s.ReportProgress(0, @{ Type = "CurrentSkipSource"; Source = $null })
+                $skipSource.Dispose()
             }
 
             $e.Result = @{ Succeeded = $succeeded; Failed = $failed }
@@ -393,6 +414,9 @@ function Show-ExtractionGui {
             param($s, $e)
             $data = $e.UserState
             switch ($data.Type) {
+                "CurrentSkipSource" {
+                    $state.SkipSource = $data.Source
+                }
                 "Status" {
                     $idx = $data.Index
                     if ($idx -lt $archiveItems.Count) {
@@ -431,6 +455,8 @@ function Show-ExtractionGui {
             $state.IsRunning = $false
             $btnStart.IsEnabled = $true
             $btnCancel.IsEnabled = $false
+            $btnSkip.IsEnabled = $false
+            $state.SkipSource = $null
             $btnAddFiles.IsEnabled = $true
             $btnAddFolder.IsEnabled = $true
             $btnRemove.IsEnabled = $true
@@ -459,8 +485,18 @@ function Show-ExtractionGui {
     $btnCancel.Add_Click({
         if ($state.CancelSource) {
             $state.CancelSource.Cancel()
+            if ($state.SkipSource) {
+                try { $state.SkipSource.Cancel() } catch {}
+            }
             & $appendLog "Cancellation requested..."
             $btnCancel.IsEnabled = $false
+        }
+    })
+
+    $btnSkip.Add_Click({
+        if ($state.IsRunning -and $state.SkipSource) {
+            try { $state.SkipSource.Cancel() } catch {}
+            & $appendLog "Skipping the current archive..."
         }
     })
 
@@ -485,6 +521,9 @@ function Show-ExtractionGui {
                 return
             }
             if ($state.CancelSource) { $state.CancelSource.Cancel() }
+            if ($state.SkipSource) {
+                try { $state.SkipSource.Cancel() } catch {}
+            }
         } elseif ($ConfirmGuiClose -and $archiveItems.Count -gt 0) {
             $r = [System.Windows.MessageBox]::Show(
                 "Close the Archive Password Extractor?",

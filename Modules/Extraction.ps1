@@ -157,7 +157,8 @@ function Test-With7z {
         [string]$Archive,
         [string]$Password,
         [bool]$OmitPasswordIfEmpty = $false,
-        [int]$Timeout = 0
+        [int]$Timeout = 0,
+        [System.Threading.CancellationToken]$CancelToken = [System.Threading.CancellationToken]::None
     )
 
     $argumentList = @("t", "-y", "-bd")
@@ -168,7 +169,7 @@ function Test-With7z {
     }
     $argumentList += $Archive
 
-    $result = Invoke-ProcessLogged -Exe $SevenZip -ArgumentList $argumentList -Operation "7Z TEST" -ShowOutput $false -TimeoutSeconds $Timeout -CondenseOutput $true
+    $result = Invoke-ProcessLogged -Exe $SevenZip -ArgumentList $argumentList -Operation "7Z TEST" -ShowOutput $false -TimeoutSeconds $Timeout -CondenseOutput $true -CancelToken $CancelToken
     $script:LastEngineResult = $result
     $code = [int]$result.ExitCode
 
@@ -182,7 +183,8 @@ function Extract-With7z {
         [string]$Password,
         [string]$OutputDir,
         [bool]$OmitPasswordIfEmpty = $false,
-        [int]$Timeout = 0
+        [int]$Timeout = 0,
+        [System.Threading.CancellationToken]$CancelToken = [System.Threading.CancellationToken]::None
     )
 
     New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
@@ -196,7 +198,7 @@ function Extract-With7z {
     }
     $argumentList += $Archive
 
-    $result = Invoke-ProcessLogged -Exe $SevenZip -ArgumentList $argumentList -Operation "7Z EXTRACT" -ShowOutput $false -TimeoutSeconds $Timeout
+    $result = Invoke-ProcessLogged -Exe $SevenZip -ArgumentList $argumentList -Operation "7Z EXTRACT" -ShowOutput $false -TimeoutSeconds $Timeout -CancelToken $CancelToken
     $script:LastEngineResult = $result
     $code = [int]$result.ExitCode
 
@@ -232,7 +234,8 @@ function Test-WithWinRar {
         [string]$RarExe,
         [string]$Archive,
         [string]$Password,
-        [int]$Timeout = 0
+        [int]$Timeout = 0,
+        [System.Threading.CancellationToken]$CancelToken = [System.Threading.CancellationToken]::None
     )
 
     $argumentList = @("t", "-idq", "-y")
@@ -242,7 +245,7 @@ function Test-WithWinRar {
     $argumentList += @(New-RarPasswordArgs -Password $Password)
     $argumentList += $Archive
 
-    $result = Invoke-ProcessLogged -Exe $RarExe -ArgumentList $argumentList -Operation "WINRAR/UNRAR TEST" -ShowOutput $false -TimeoutSeconds $Timeout -CondenseOutput $true
+    $result = Invoke-ProcessLogged -Exe $RarExe -ArgumentList $argumentList -Operation "WINRAR/UNRAR TEST" -ShowOutput $false -TimeoutSeconds $Timeout -CondenseOutput $true -CancelToken $CancelToken
     $script:LastEngineResult = $result
     $code = [int]$result.ExitCode
 
@@ -255,7 +258,8 @@ function Extract-WithWinRar {
         [string]$Archive,
         [string]$Password,
         [string]$OutputDir,
-        [int]$Timeout = 0
+        [int]$Timeout = 0,
+        [System.Threading.CancellationToken]$CancelToken = [System.Threading.CancellationToken]::None
     )
 
     New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
@@ -271,7 +275,7 @@ function Extract-WithWinRar {
     $argumentList += $Archive
     $argumentList += $dest
 
-    $result = Invoke-ProcessLogged -Exe $RarExe -ArgumentList $argumentList -Operation "WINRAR/UNRAR EXTRACT" -ShowOutput $false -TimeoutSeconds $Timeout
+    $result = Invoke-ProcessLogged -Exe $RarExe -ArgumentList $argumentList -Operation "WINRAR/UNRAR EXTRACT" -ShowOutput $false -TimeoutSeconds $Timeout -CancelToken $CancelToken
     $script:LastEngineResult = $result
     $code = [int]$result.ExitCode
 
@@ -380,7 +384,8 @@ function Try-EnginePassword {
         [bool]$CanClearFailedOutput = $true,
         [bool]$OmitPasswordArg = $false,
         [int]$Timeout = 0,
-        [bool]$TestOnly = $false
+        [bool]$TestOnly = $false,
+        [System.Threading.CancellationToken]$CancelToken = [System.Threading.CancellationToken]::None
     )
 
     Write-Log "Trying engine $EngineName on archive $Archive"
@@ -389,7 +394,7 @@ function Try-EnginePassword {
     $extractOk = $false
 
     if ($EngineName -eq "7-Zip" -or $EngineName -eq "PeaZip bundled 7z") {
-        $testOk = Test-With7z -SevenZip $EnginePath -Archive $Archive -Password $Password -OmitPasswordIfEmpty $OmitPasswordArg -Timeout $Timeout
+        $testOk = Test-With7z -SevenZip $EnginePath -Archive $Archive -Password $Password -OmitPasswordIfEmpty $OmitPasswordArg -Timeout $Timeout -CancelToken $CancelToken
 
         if (-not $TestOnly) {
             if ($testOk -or $TryExtractEvenIfTestFails) {
@@ -397,11 +402,11 @@ function Try-EnginePassword {
                     Write-Log "$EngineName test failed; trying extraction fallback anyway." "WARN"
                 }
 
-                $extractOk = Extract-With7z -SevenZip $EnginePath -Archive $Archive -Password $Password -OutputDir $OutputDir -OmitPasswordIfEmpty $OmitPasswordArg -Timeout $Timeout
+                $extractOk = Extract-With7z -SevenZip $EnginePath -Archive $Archive -Password $Password -OutputDir $OutputDir -OmitPasswordIfEmpty $OmitPasswordArg -Timeout $Timeout -CancelToken $CancelToken
             }
         }
     } elseif ($EngineName -in @("WinRAR", "UnRAR", "Rar")) {
-        $testOk = Test-WithWinRar -RarExe $EnginePath -Archive $Archive -Password $Password -Timeout $Timeout
+        $testOk = Test-WithWinRar -RarExe $EnginePath -Archive $Archive -Password $Password -Timeout $Timeout -CancelToken $CancelToken
 
         if (-not $TestOnly) {
             if ($testOk -or $TryExtractEvenIfTestFails) {
@@ -409,7 +414,7 @@ function Try-EnginePassword {
                     Write-Log "$EngineName test failed; trying extraction fallback anyway." "WARN"
                 }
 
-                $extractOk = Extract-WithWinRar -RarExe $EnginePath -Archive $Archive -Password $Password -OutputDir $OutputDir -Timeout $Timeout
+                $extractOk = Extract-WithWinRar -RarExe $EnginePath -Archive $Archive -Password $Password -OutputDir $OutputDir -Timeout $Timeout -CancelToken $CancelToken
             }
         }
     }
@@ -500,6 +505,9 @@ function Get-ExtractionErrorType {
         [bool]$ArchiveKnownEncrypted = $false
     )
 
+    if ($ExitCode -eq -997) {
+        return [PSCustomObject]@{ Type = "Cancelled"; Confidence = "High" }
+    }
     if ($ExitCode -eq -998) {
         return [PSCustomObject]@{ Type = "Timeout"; Confidence = "High" }
     }
