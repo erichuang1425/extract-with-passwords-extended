@@ -222,7 +222,8 @@ function Invoke-ProcessLogged {
         [string]$Operation,
         [bool]$ShowOutput = $false,
         [int]$TimeoutSeconds = 0,
-        [bool]$CondenseOutput = $false
+        [bool]$CondenseOutput = $false,
+        [System.Threading.CancellationToken]$CancelToken = [System.Threading.CancellationToken]::None
     )
 
     $argArray = @()
@@ -271,36 +272,44 @@ function Invoke-ProcessLogged {
             Write-Log "Could not close stdin: $($_.Exception.Message)" "WARN"
         }
 
-        if ($TimeoutSeconds -gt 0) {
-            $exited = $p.WaitForExit($TimeoutSeconds * 1000)
+        $startedAt = [System.Diagnostics.Stopwatch]::StartNew()
+        $cancelled = $false
+        $timedOut = $false
+        while (-not $p.WaitForExit(100)) {
+            if ($CancelToken.IsCancellationRequested) {
+                $cancelled = $true
+                break
+            }
+            if ($TimeoutSeconds -gt 0 -and $startedAt.Elapsed.TotalSeconds -ge $TimeoutSeconds) {
+                $timedOut = $true
+                break
+            }
+        }
 
-            if (-not $exited) {
-                try { $p.Kill() } catch {
-                    Write-Log "Could not kill timed-out process: $($_.Exception.Message)" "WARN"
-                }
+        if ($cancelled -or $timedOut) {
+            try { $p.Kill() } catch {
+                Write-Log "Could not kill stopped process: $($_.Exception.Message)" "WARN"
+            }
+            if ($cancelled) {
+                $exitCode = -997
+                $output = @("[CANCELLED] Process was stopped by the user.")
+            } else {
                 $exitCode = -998
                 $output = @("[TIMEOUT after ${TimeoutSeconds}s] Process timed out and was killed.")
-
-                try {
-                    if ($stdoutTask.Wait(3000)) {
-                        $partialOut = $stdoutTask.Result
-                        if ($partialOut) { $output += ($partialOut -split "`r?`n") }
-                    }
-                } catch {}
-                try {
-                    if ($stderrTask.Wait(3000)) {
-                        $partialErr = $stderrTask.Result
-                        if ($partialErr) { $output += ($partialErr -split "`r?`n") }
-                    }
-                } catch {}
-            } else {
-                $p.WaitForExit()
-                $exitCode = $p.ExitCode
-                $stdout = $stdoutTask.Result
-                $stderr = $stderrTask.Result
-                if ($stdout) { $output += ($stdout -split "`r?`n") }
-                if ($stderr) { $output += ($stderr -split "`r?`n") }
             }
+
+            try {
+                if ($stdoutTask.Wait(3000)) {
+                    $partialOut = $stdoutTask.Result
+                    if ($partialOut) { $output += ($partialOut -split "`r?`n") }
+                }
+            } catch {}
+            try {
+                if ($stderrTask.Wait(3000)) {
+                    $partialErr = $stderrTask.Result
+                    if ($partialErr) { $output += ($partialErr -split "`r?`n") }
+                }
+            } catch {}
         } else {
             $p.WaitForExit()
             $exitCode = $p.ExitCode

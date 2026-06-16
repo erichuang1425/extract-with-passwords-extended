@@ -43,6 +43,7 @@ function Show-ExtractionGui {
     $svLog = $window.FindName("svLog")
     $btnStart = $window.FindName("btnStart")
     $btnCancel = $window.FindName("btnCancel")
+    $btnSkip = $window.FindName("btnSkip")
     $btnOpenOutput = $window.FindName("btnOpenOutput")
 
     # MenuItems inside a ContextMenu sit in their own WPF namescope, so
@@ -72,6 +73,7 @@ function Show-ExtractionGui {
     $state = @{
         IsRunning = $false
         CancelSource = $null
+        SkipSource = $null
         OutputFolders = @()
     }
 
@@ -272,6 +274,96 @@ function Show-ExtractionGui {
         }
     })
 
+    $showGuiYesNo = {
+        param([string]$Message, [string]$Title, [bool]$DefaultYes = $true)
+        $result = [System.Windows.MessageBox]::Show(
+            $Message,
+            $Title,
+            [System.Windows.MessageBoxButton]::YesNo,
+            [System.Windows.MessageBoxImage]::Question,
+            $(if ($DefaultYes) { [System.Windows.MessageBoxResult]::Yes } else { [System.Windows.MessageBoxResult]::No }))
+        return ($result -eq [System.Windows.MessageBoxResult]::Yes)
+    }
+
+    $selectGuiFolder = {
+        param([string]$Description, [string]$InitialPath)
+        $dlg = New-Object System.Windows.Forms.FolderBrowserDialog
+        $dlg.Description = $Description
+        if ($InitialPath -and (Test-Path -LiteralPath $InitialPath -PathType Container)) {
+            $dlg.SelectedPath = $InitialPath
+        }
+        if ($dlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+            return $dlg.SelectedPath
+        }
+        return $null
+    }
+
+    $showOutputBehaviorDialog = {
+        param([string]$Current = "replace")
+
+        $labels = @{
+            "replace" = "Overwrite existing folders"
+            "new"     = "Keep both (new _2/_3 folders)"
+            "merge"   = "Merge, skip duplicate files"
+        }
+        if (-not $labels.ContainsKey($Current)) { $Current = "replace" }
+
+        $dlg = New-Object System.Windows.Window
+        $dlg.Title = "Existing Output Folders"
+        $dlg.Width = 430
+        $dlg.Height = 210
+        $dlg.WindowStartupLocation = "CenterOwner"
+        $dlg.ResizeMode = "NoResize"
+        $dlg.Background = [System.Windows.Media.Brushes]::White
+        $dlg.Owner = $window
+
+        $panel = New-Object System.Windows.Controls.StackPanel
+        $panel.Margin = "16"
+
+        $text = New-Object System.Windows.Controls.TextBlock
+        $text.Text = "How should existing extracted folders be handled?"
+        $text.Margin = "0,0,0,10"
+        $panel.Children.Add($text) | Out-Null
+
+        $combo = New-Object System.Windows.Controls.ComboBox
+        $combo.Margin = "0,0,0,14"
+        $combo.DisplayMemberPath = "Label"
+        $combo.SelectedValuePath = "Value"
+        $combo.Items.Add([PSCustomObject]@{ Label = $labels["replace"]; Value = "replace" }) | Out-Null
+        $combo.Items.Add([PSCustomObject]@{ Label = $labels["new"]; Value = "new" }) | Out-Null
+        $combo.Items.Add([PSCustomObject]@{ Label = $labels["merge"]; Value = "merge" }) | Out-Null
+        foreach ($item in $combo.Items) {
+            if ($item.Value -eq $Current) {
+                $combo.SelectedItem = $item
+                break
+            }
+        }
+        $panel.Children.Add($combo) | Out-Null
+
+        $buttons = New-Object System.Windows.Controls.StackPanel
+        $buttons.Orientation = "Horizontal"
+        $buttons.HorizontalAlignment = "Right"
+        $ok = New-Object System.Windows.Controls.Button
+        $ok.Content = "OK"
+        $ok.Width = 80
+        $ok.Margin = "0,0,8,0"
+        $cancel = New-Object System.Windows.Controls.Button
+        $cancel.Content = "Cancel"
+        $cancel.Width = 80
+        $buttons.Children.Add($ok) | Out-Null
+        $buttons.Children.Add($cancel) | Out-Null
+        $panel.Children.Add($buttons) | Out-Null
+
+        $ok.Add_Click({ $dlg.DialogResult = $true })
+        $cancel.Add_Click({ $dlg.DialogResult = $false })
+        $dlg.Content = $panel
+
+        if ($dlg.ShowDialog() -eq $true -and $combo.SelectedValue) {
+            return [string]$combo.SelectedValue
+        }
+        return $Current
+    }
+
     $btnStart.Add_Click({
         if ($state.IsRunning) { return }
         if ($archiveItems.Count -eq 0) {
@@ -279,11 +371,92 @@ function Show-ExtractionGui {
             return
         }
 
+        $archives = @($archiveItems | ForEach-Object { $_.FullPath })
+        if ($AskBeforeExtracting) {
+            $continue = & $showGuiYesNo "Continue with these $($archives.Count) archive(s)?" "Confirm Extraction" $true
+            if (-not $continue) {
+                & $appendLog "Extraction cancelled before start"
+                return
+            }
+        }
+
+        $useCustomOutputDir = $false
+        $customOutputBase = $null
+        if ($DefaultOutputDirectory -and $DefaultOutputDirectory.Length -gt 0) {
+            $expanded = [Environment]::ExpandEnvironmentVariables($DefaultOutputDirectory)
+            if (!(Test-Path -LiteralPath $expanded)) {
+                $createIt = & $showGuiYesNo "Default output directory does not exist:`n$expanded`n`nCreate it?" "Create Output Directory" $true
+                if ($createIt) {
+                    try { New-Item -ItemType Directory -Force -Path $expanded | Out-Null } catch {
+                        & $appendLog "Could not create default output directory: $($_.Exception.Message)"
+                    }
+                }
+            }
+            if (Test-Path -LiteralPath $expanded -PathType Container) {
+                $useCustomOutputDir = $true
+                $customOutputBase = $expanded
+            }
+        }
+
+        if ($AlwaysAskOutputDirectory) {
+            $currentDefault = if ($useCustomOutputDir) { $customOutputBase } else { "next to each archive" }
+            $chooseCustom = & $showGuiYesNo "Current output location is: $currentDefault`n`nChoose a different output folder for this run?" "Output Folder" $false
+            if ($chooseCustom) {
+                $chosen = & $selectGuiFolder "Choose output folder for extracted archives" $customOutputBase
+                if ($chosen) {
+                    $useCustomOutputDir = $true
+                    $customOutputBase = $chosen
+                }
+            }
+        }
+
+        if ($AskOutputBehavior) {
+            $script:ExistingOutputBehavior = & $showOutputBehaviorDialog $ExistingOutputBehavior
+            if ($script:ExistingOutputBehavior -eq "merge") {
+                $script:SevenZipOverwriteMode = "aos"
+                $script:WinRarOverwriteMode = "-o-"
+            } else {
+                $script:SevenZipOverwriteMode = "aoa"
+                $script:WinRarOverwriteMode = "-o+"
+            }
+        }
+
+        $separateFolders = if ($AskSeparateFolders) {
+            & $showGuiYesNo "Extract each archive into its own separate folder?" "Output Layout" $DefaultSeparateFolders
+        } else {
+            $DefaultSeparateFolders
+        }
+
+        $commonOutputDir = $null
+        if (-not $separateFolders) {
+            $firstDir = if ($useCustomOutputDir) { $customOutputBase } else { Split-Path $archives[0] -Parent }
+            if ([string]::IsNullOrEmpty($firstDir)) {
+                $firstDir = [IO.Path]::GetPathRoot($archives[0])
+            }
+            $defaultCommon = Join-Path $firstDir ("Extracted_Batch_" + (Get-Date -Format "yyyyMMdd_HHmmss"))
+            $chooseCommon = & $showGuiYesNo "Use this shared output folder?`n$defaultCommon`n`nChoose No to browse for a different folder." "Shared Output Folder" $true
+            if ($chooseCommon) {
+                $commonOutputDir = $defaultCommon
+            } else {
+                $chosenCommon = & $selectGuiFolder "Choose shared output folder" $firstDir
+                $commonOutputDir = if ($chosenCommon) { $chosenCommon } else { $defaultCommon }
+            }
+            try { New-Item -ItemType Directory -Force -Path $commonOutputDir | Out-Null } catch {
+                & $appendLog "Could not create shared output directory: $($_.Exception.Message)"
+                return
+            }
+        }
+
+        $layoutText = if ($separateFolders) { "separate folders" } else { "shared folder: $commonOutputDir" }
+        $baseText = if ($useCustomOutputDir -and $separateFolders) { " under $customOutputBase" } else { "" }
+        & $appendLog "Output: $layoutText$baseText; existing folders: $ExistingOutputBehavior"
+
         $state.IsRunning = $true
         $state.CancelSource = New-Object System.Threading.CancellationTokenSource
         $state.OutputFolders = @()
         $btnStart.IsEnabled = $false
         $btnCancel.IsEnabled = $true
+        $btnSkip.IsEnabled = $true
         $btnOpenOutput.IsEnabled = $false
         $btnAddFiles.IsEnabled = $false
         $btnAddFolder.IsEnabled = $false
@@ -291,7 +464,6 @@ function Show-ExtractionGui {
         $btnClear.IsEnabled = $false
 
         $total = $archiveItems.Count
-        $archives = @($archiveItems | ForEach-Object { $_.FullPath })
 
         $worker = New-Object System.ComponentModel.BackgroundWorker
         $worker.WorkerReportsProgress = $true
@@ -301,6 +473,10 @@ function Show-ExtractionGui {
             $workArgs = $e.Argument
             $items = $workArgs.Items
             $token = $workArgs.CancelToken
+            $separateFolders = [bool]$workArgs.SeparateFolders
+            $commonOutputDir = $workArgs.CommonOutputDir
+            $useCustomOutputDir = [bool]$workArgs.UseCustomOutputDir
+            $customOutputBase = $workArgs.CustomOutputBase
             $passwords = @(Get-Passwords)
 
             $sevenZip = Get-NormalSevenZipPath
@@ -314,6 +490,14 @@ function Show-ExtractionGui {
                 if ($token.IsCancellationRequested) { break }
 
                 $archive = $items[$i]
+                $skipSource = New-Object System.Threading.CancellationTokenSource
+                # Marshal the per-archive cancellation source through
+                # BackgroundWorker's normal progress channel. Invoking a
+                # PowerShell script block directly on Dispatcher/worker threads
+                # can fail because those threads do not own a PowerShell
+                # runspace ("There is no Runspace available...").
+                $s.ReportProgress(0, @{ Type = "CurrentSkipSource"; Source = $skipSource })
+                $attemptToken = $skipSource.Token
                 $sw = [System.Diagnostics.Stopwatch]::StartNew()
 
                 $s.ReportProgress(0, @{ Type = "Status"; Index = $i; Text = "Testing..."; Overall = [math]::Floor(($i / $items.Count) * 100) })
@@ -322,14 +506,21 @@ function Show-ExtractionGui {
                 if ($enginePlan.Count -eq 0) {
                     $sw.Stop()
                     $s.ReportProgress(0, @{ Type = "Result"; Index = $i; Status = "No Engine"; Password = ""; RealPassword = ""; Time = (Format-Elapsed $sw) })
+                    $s.ReportProgress(0, @{ Type = "CurrentSkipSource"; Source = $null })
+                    $skipSource.Dispose()
                     $failed++
                     continue
                 }
 
                 $archiveDir = Split-Path $archive -Parent
                 $archiveBase = Get-ArchiveBaseName $archive
-                $outputDir = Join-Path $archiveDir $archiveBase
-                $outputDir = Resolve-OutputDir -BaseDir $outputDir -IsSharedOutput $false
+                if ($separateFolders) {
+                    $outputBaseDir = if ($useCustomOutputDir) { $customOutputBase } else { $archiveDir }
+                    $outputDir = Join-Path $outputBaseDir $archiveBase
+                    $outputDir = Resolve-OutputDir -BaseDir $outputDir -IsSharedOutput $false
+                } else {
+                    $outputDir = Resolve-OutputDir -BaseDir $commonOutputDir -IsSharedOutput $true
+                }
 
                 $isEncryptable = Test-IsEncryptionCapable $archive
                 if ($isEncryptable -and $CheckEncryptionBeforeCycling -and $sevenZip) {
@@ -341,7 +532,8 @@ function Show-ExtractionGui {
 
                 if (-not $isEncryptable) {
                     foreach ($engine in $enginePlan) {
-                        $ok = Try-EnginePassword -EngineName $engine.Name -EnginePath $engine.Path -Archive $archive -Password "" -OutputDir $outputDir -CanClearFailedOutput $true -OmitPasswordArg $true -Timeout $ExtractionTimeoutSeconds
+                        $ok = Try-EnginePassword -EngineName $engine.Name -EnginePath $engine.Path -Archive $archive -Password "" -OutputDir $outputDir -CanClearFailedOutput $separateFolders -OmitPasswordArg $true -Timeout $ExtractionTimeoutSeconds -CancelToken $attemptToken
+                        if ($attemptToken.IsCancellationRequested) { break }
                         if ($ok) {
                             $sw.Stop()
                             $s.ReportProgress(0, @{ Type = "Result"; Index = $i; Status = "Success"; Password = "(none)"; RealPassword = ""; Time = (Format-Elapsed $sw); OutputDir = $outputDir })
@@ -360,9 +552,10 @@ function Show-ExtractionGui {
                         $s.ReportProgress(0, @{ Type = "Password"; Index = $i; Current = $pwIndex; Total = $passwords.Count; Pct = $currentPct })
 
                         foreach ($engine in $enginePlan) {
-                            $testOk = Try-EnginePassword -EngineName $engine.Name -EnginePath $engine.Path -Archive $archive -Password $pw -OutputDir $outputDir -CanClearFailedOutput $true -Timeout $ExtractionTimeoutSeconds -TestOnly $true
+                            $testOk = Try-EnginePassword -EngineName $engine.Name -EnginePath $engine.Path -Archive $archive -Password $pw -OutputDir $outputDir -CanClearFailedOutput $separateFolders -Timeout $ExtractionTimeoutSeconds -TestOnly $true -CancelToken $attemptToken
+                            if ($attemptToken.IsCancellationRequested) { break }
                             if ($testOk) {
-                                $extractOk = Try-EnginePassword -EngineName $engine.Name -EnginePath $engine.Path -Archive $archive -Password $pw -OutputDir $outputDir -CanClearFailedOutput $true -Timeout $ExtractionTimeoutSeconds -TestOnly $false
+                                $extractOk = Try-EnginePassword -EngineName $engine.Name -EnginePath $engine.Path -Archive $archive -Password $pw -OutputDir $outputDir -CanClearFailedOutput $separateFolders -Timeout $ExtractionTimeoutSeconds -TestOnly $false -CancelToken $attemptToken
                                 if ($extractOk) {
                                     $sw.Stop()
                                     $masked = Format-MaskedPassword $pw
@@ -374,16 +567,22 @@ function Show-ExtractionGui {
                                 }
                             }
                         }
-                        if ($found) { break }
+                        if ($found -or $attemptToken.IsCancellationRequested) { break }
                     }
                 }
 
-                if (-not $found) {
+                if ($attemptToken.IsCancellationRequested) {
+                    $sw.Stop()
+                    $s.ReportProgress(0, @{ Type = "Result"; Index = $i; Status = "Skipped"; Password = ""; RealPassword = ""; Time = (Format-Elapsed $sw) })
+                    Remove-EmptyOutputDir -OutputDir $outputDir -SeparateFolders $separateFolders
+                } elseif (-not $found) {
                     $sw.Stop()
                     $s.ReportProgress(0, @{ Type = "Result"; Index = $i; Status = "Failed"; Password = ""; RealPassword = ""; Time = (Format-Elapsed $sw) })
-                    Remove-EmptyOutputDir -OutputDir $outputDir -SeparateFolders $true
+                    Remove-EmptyOutputDir -OutputDir $outputDir -SeparateFolders $separateFolders
                     $failed++
                 }
+                $s.ReportProgress(0, @{ Type = "CurrentSkipSource"; Source = $null })
+                $skipSource.Dispose()
             }
 
             $e.Result = @{ Succeeded = $succeeded; Failed = $failed }
@@ -393,6 +592,9 @@ function Show-ExtractionGui {
             param($s, $e)
             $data = $e.UserState
             switch ($data.Type) {
+                "CurrentSkipSource" {
+                    $state.SkipSource = $data.Source
+                }
                 "Status" {
                     $idx = $data.Index
                     if ($idx -lt $archiveItems.Count) {
@@ -431,6 +633,8 @@ function Show-ExtractionGui {
             $state.IsRunning = $false
             $btnStart.IsEnabled = $true
             $btnCancel.IsEnabled = $false
+            $btnSkip.IsEnabled = $false
+            $state.SkipSource = $null
             $btnAddFiles.IsEnabled = $true
             $btnAddFolder.IsEnabled = $true
             $btnRemove.IsEnabled = $true
@@ -453,14 +657,31 @@ function Show-ExtractionGui {
             }
         })
 
-        $worker.RunWorkerAsync(@{ Items = $archives; CancelToken = $state.CancelSource.Token })
+        $worker.RunWorkerAsync(@{
+            Items = $archives
+            CancelToken = $state.CancelSource.Token
+            SeparateFolders = $separateFolders
+            CommonOutputDir = $commonOutputDir
+            UseCustomOutputDir = $useCustomOutputDir
+            CustomOutputBase = $customOutputBase
+        })
     })
 
     $btnCancel.Add_Click({
         if ($state.CancelSource) {
             $state.CancelSource.Cancel()
+            if ($state.SkipSource) {
+                try { $state.SkipSource.Cancel() } catch {}
+            }
             & $appendLog "Cancellation requested..."
             $btnCancel.IsEnabled = $false
+        }
+    })
+
+    $btnSkip.Add_Click({
+        if ($state.IsRunning -and $state.SkipSource) {
+            try { $state.SkipSource.Cancel() } catch {}
+            & $appendLog "Skipping the current archive..."
         }
     })
 
@@ -485,6 +706,9 @@ function Show-ExtractionGui {
                 return
             }
             if ($state.CancelSource) { $state.CancelSource.Cancel() }
+            if ($state.SkipSource) {
+                try { $state.SkipSource.Cancel() } catch {}
+            }
         } elseif ($ConfirmGuiClose -and $archiveItems.Count -gt 0) {
             $r = [System.Windows.MessageBox]::Show(
                 "Close the Archive Password Extractor?",
