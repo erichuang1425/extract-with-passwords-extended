@@ -71,4 +71,33 @@ Describe 'Invoke-NestedExtractionPass cancellation' {
         Should -Invoke Find-NestedArchives -Times 0 -Exactly
         Should -Invoke Try-EnginePassword -Times 0 -Exactly
     }
+
+    It 'reports a nested archive cancelled mid-attempt as Skipped, not Failed' {
+        $cts = New-Object System.Threading.CancellationTokenSource
+        $script:cancelSource = $cts
+
+        Mock Test-IsEncryptionCapable { return $true }
+        Mock Get-PasswordTryOrder { return @('pw') }
+        Mock Remove-EmptyOutputDir { }
+        Mock Get-LastEngineFailureType { return 'WrongPassword' }
+        # Simulate the user pressing Skip/Cancel while the engine attempt runs:
+        # the token flips to cancelled and the attempt returns failure.
+        Mock Try-EnginePassword {
+            $script:cancelSource.Cancel()
+            return $false
+        }
+
+        $results = @(Invoke-NestedExtractionPass `
+            -SeedFolders @('C:/seed') `
+            -Passwords @('pw') `
+            -SevenZip 'C:/7z.exe' `
+            -PeaZip7z $null `
+            -WinRar $null `
+            -MaxDepth 1 `
+            -CancelToken $cts.Token)
+
+        $results.Count | Should -Be 1
+        $results[0].Status | Should -Be 'Skipped'
+        $results[0].Reason | Should -Be 'Cancelled'
+    }
 }
