@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Batch extraction no longer wedges partway through a large queue.** Every
+  password test, extraction, and encryption probe launched an engine process
+  with redirected `stdin`/`stdout`/`stderr` but never disposed it, leaking the
+  process handle and three pipe handles per launch (the async stdout/stderr
+  reads also stayed bound to the ThreadPool I/O completion port). Because each
+  encrypted archive spawns many such processes, the leaked handles piled up
+  faster than the finalizer reclaimed them and extraction could appear to hang
+  after a couple dozen archives. The engine launchers now dispose the process in
+  a `finally` block, releasing the handles immediately.
 - **`.tar.zst` (and other compound tar archives) now fully extract in one pass.**
   7-Zip and WinRAR peel only the outer compression layer of a `.tar.zst` /
   `.tar.gz` / `.tgz` / … archive, leaving an intermediate `.tar` behind. That
