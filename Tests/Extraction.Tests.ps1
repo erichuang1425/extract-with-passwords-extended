@@ -117,6 +117,54 @@ Describe 'Try-EnginePassword cancellation guard' {
     }
 }
 
+Describe 'Try-EnginePassword compound-tar cancellation cleanup' {
+    BeforeAll {
+        function Write-Log { param($Message, $Level) }
+        # Stubs for the cross-module helpers Try-EnginePassword calls on the
+        # compound-tar path, so they can be mocked here.
+        function Test-IsCompoundTarArchive { param($Archive) $true }
+        function Expand-CompoundTarResidue { return $true }
+        function Clear-AttemptOutput { param($OutputDir) }
+        $script:TryExtractEvenIfTestFails = $true
+        $script:CleanFailedAttemptOutput = $true
+    }
+
+    It 'clears partial output when Skip/Cancel interrupts residue expansion' {
+        $cts = New-Object System.Threading.CancellationTokenSource
+        $cts.Cancel()
+
+        Mock Test-With7z { return $true }
+        Mock Extract-With7z { return $true }
+        Mock Test-IsCompoundTarArchive { return $true }
+        # Forwarded cancel token makes the inner residue expansion fail.
+        Mock Expand-CompoundTarResidue { return $false }
+        Mock Clear-AttemptOutput {}
+
+        $result = Try-EnginePassword -EngineName '7-Zip' -EnginePath 'C:/7-Zip/7z.exe' `
+            -Archive 'a.tar.zst' -Password 'x' -OutputDir 'C:/out' -CanClearFailedOutput $true `
+            -Timeout 0 -CancelToken $cts.Token
+
+        $result | Should -BeFalse
+        Should -Invoke Clear-AttemptOutput -Times 1 -Exactly
+    }
+
+    It 'leaves the recovered outer layer in place for a genuine partial extraction' {
+        # Not cancelled: residue expansion fails on its own merits.
+        Mock Test-With7z { return $true }
+        Mock Extract-With7z { return $true }
+        Mock Test-IsCompoundTarArchive { return $true }
+        Mock Expand-CompoundTarResidue { return $false }
+        Mock Clear-AttemptOutput {}
+
+        $result = Try-EnginePassword -EngineName '7-Zip' -EnginePath 'C:/7-Zip/7z.exe' `
+            -Archive 'a.tar.zst' -Password 'x' -OutputDir 'C:/out' -CanClearFailedOutput $true `
+            -Timeout 0
+
+        $result | Should -BeFalse
+        Should -Invoke Clear-AttemptOutput -Times 0 -Exactly
+    }
+}
+
 Describe 'Get-EngineName' {
     It 'maps engine executables to display names' -ForEach @(
         @{ Path = 'C:/WinRAR/UnRAR.exe'; Expected = 'UnRAR' }
