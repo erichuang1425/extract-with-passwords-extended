@@ -524,11 +524,24 @@ function Show-ExtractionGui {
 
                 $isEncryptable = Test-IsEncryptionCapable $archive
                 if ($isEncryptable -and $CheckEncryptionBeforeCycling -and $sevenZip) {
-                    $enc = Test-ArchiveIsEncrypted -Archive $archive -SevenZipPath $sevenZip
+                    $enc = Test-ArchiveIsEncrypted -Archive $archive -SevenZipPath $sevenZip -CancelToken $attemptToken
                     if ($enc -eq $false) { $isEncryptable = $false }
                 }
 
                 $found = $false
+
+                # The encryption probe above runs its own engine process; if the
+                # user pressed Skip Current/Cancel while it was running, stop now
+                # instead of cycling passwords or launching further engine
+                # processes on this archive.
+                if ($attemptToken.IsCancellationRequested -or $token.IsCancellationRequested) {
+                    $sw.Stop()
+                    $s.ReportProgress(0, @{ Type = "Result"; Index = $i; Status = "Skipped"; Password = ""; RealPassword = ""; Time = (Format-Elapsed $sw) })
+                    Remove-EmptyOutputDir -OutputDir $outputDir -SeparateFolders $separateFolders
+                    $s.ReportProgress(0, @{ Type = "CurrentSkipSource"; Source = $null })
+                    $skipSource.Dispose()
+                    continue
+                }
 
                 if (-not $isEncryptable) {
                     foreach ($engine in $enginePlan) {

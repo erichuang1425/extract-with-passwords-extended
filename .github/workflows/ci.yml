@@ -18,12 +18,19 @@ jobs:
 
       - name: Install PSScriptAnalyzer
         run: |
-          if (-not (Get-PSRepository -Name PSGallery -ErrorAction SilentlyContinue)) {
-            Register-PSRepository -Default
-          }
-          Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
           if (-not (Get-Module -ListAvailable PSScriptAnalyzer)) {
-            Install-Module PSScriptAnalyzer -Force -Scope CurrentUser
+            if (Get-Command Install-PSResource -ErrorAction SilentlyContinue) {
+              # PSResourceGet (bundled with PowerShell 7.4+) talks to PSGallery
+              # directly over HTTPS, avoiding the flaky legacy nuget.exe path that
+              # Register-PSRepository -Default intermittently fails through.
+              Install-PSResource -Name PSScriptAnalyzer -TrustRepository -Quiet
+            } else {
+              if (-not (Get-PSRepository -Name PSGallery -ErrorAction SilentlyContinue)) {
+                Register-PSRepository -Default -ErrorAction SilentlyContinue
+              }
+              Set-PSRepository -Name PSGallery -InstallationPolicy Trusted -ErrorAction SilentlyContinue
+              Install-Module PSScriptAnalyzer -Force -Scope CurrentUser
+            }
           }
 
       - name: Run PSScriptAnalyzer
@@ -53,12 +60,19 @@ jobs:
 
       - name: Install Pester
         run: |
-          if (-not (Get-PSRepository -Name PSGallery -ErrorAction SilentlyContinue)) {
-            Register-PSRepository -Default
-          }
-          Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
           if (-not (Get-Module -ListAvailable Pester | Where-Object { $_.Version -ge [version]'5.0.0' })) {
-            Install-Module Pester -MinimumVersion 5.5.0 -Force -SkipPublisherCheck -Scope CurrentUser
+            if (Get-Command Install-PSResource -ErrorAction SilentlyContinue) {
+              # PSResourceGet (bundled with PowerShell 7.4+) talks to PSGallery
+              # directly over HTTPS, avoiding the flaky legacy nuget.exe path that
+              # Register-PSRepository -Default intermittently fails through.
+              Install-PSResource -Name Pester -Version '[5.5.0,6.0.0)' -TrustRepository -Quiet
+            } else {
+              if (-not (Get-PSRepository -Name PSGallery -ErrorAction SilentlyContinue)) {
+                Register-PSRepository -Default -ErrorAction SilentlyContinue
+              }
+              Set-PSRepository -Name PSGallery -InstallationPolicy Trusted -ErrorAction SilentlyContinue
+              Install-Module Pester -MinimumVersion 5.5.0 -Force -SkipPublisherCheck -Scope CurrentUser
+            }
           }
 
       - name: Run Pester tests (${{ matrix.suite }})
