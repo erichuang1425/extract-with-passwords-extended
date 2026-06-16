@@ -1034,6 +1034,7 @@ try {
     $nestedFound = 0
     $nestedExtracted = 0
     $nestedFailed = 0
+    $nestedSkipped = 0
     $nestedMaxDepth = 0
 
     if ($ExtractNestedArchives -and $MaxNestedDepth -ge 1 -and @($OutputFolders).Count -gt 0) {
@@ -1073,6 +1074,10 @@ try {
                 if ($r.Status -eq "Succeeded" -and $r.Password) {
                     if ($CachedPasswordSet.ContainsKey($r.Password)) { $CacheHitCount++ } else { $CacheMissCount++ }
                 }
+            } elseif ($r.Status -eq "Skipped") {
+                # User-cancelled mid-attempt: not a real extraction failure, so keep it
+                # out of the failure count and the failure-reason breakdown.
+                $nestedSkipped++
             } else {
                 $nestedFailed++
                 $reason = if ($r.Reason) { [string]$r.Reason } else { "Unknown" }
@@ -1091,10 +1096,13 @@ try {
             Write-Host ("    | {0,-56} |" -f "Nested archives found:     $nestedFound") -ForegroundColor Gray
             Write-Host ("    | {0,-56} |" -f "Nested extracted:          $nestedExtracted") -ForegroundColor Green
             Write-Host ("    | {0,-56} |" -f "Nested failed:             $nestedFailed") -ForegroundColor $(if ($nestedFailed -gt 0) { "Red" } else { "Gray" })
+            if ($nestedSkipped -gt 0) {
+                Write-Host ("    | {0,-56} |" -f "Nested skipped (cancelled): $nestedSkipped") -ForegroundColor Yellow
+            }
             Write-Host ("    | {0,-56} |" -f "Max nesting depth reached: $nestedMaxDepth") -ForegroundColor Gray
             Write-Host $nestedBorder -ForegroundColor DarkCyan
         }
-        Write-Log "Nested pass: found=$nestedFound extracted=$nestedExtracted failed=$nestedFailed maxDepth=$nestedMaxDepth"
+        Write-Log "Nested pass: found=$nestedFound extracted=$nestedExtracted failed=$nestedFailed skipped=$nestedSkipped maxDepth=$nestedMaxDepth"
     }
 
     # ============================================================
