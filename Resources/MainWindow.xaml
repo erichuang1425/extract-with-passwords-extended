@@ -149,6 +149,8 @@
                     BorderBrush="#a6e3a1" Margin="0,0,6,0" FontWeight="SemiBold" DockPanel.Dock="Left"/>
             <Button Name="btnCancel" Content="Cancel" Foreground="#f38ba8" BorderBrush="#f38ba8"
                     IsEnabled="False" Margin="0,0,6,0" DockPanel.Dock="Left"/>
+            <Button Name="btnSkip" Content="Skip Current" Foreground="#f9e2af" BorderBrush="#f9e2af"
+                    IsEnabled="False" Margin="0,0,6,0" DockPanel.Dock="Left"/>
             <Button Name="btnOpenOutput" Content="Open Output" IsEnabled="False" Margin="0,0,6,0" DockPanel.Dock="Left"/>
             <TextBlock Name="txtCount" Text="0 archives" Foreground="#6c7086" FontSize="12"
                        VerticalAlignment="Center" DockPanel.Dock="Right"/>

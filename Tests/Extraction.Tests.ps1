@@ -10,6 +10,10 @@ BeforeAll {
 }
 
 Describe 'Get-ExtractionErrorType' {
+    It 'classifies a user-cancelled engine process' {
+        (Get-ExtractionErrorType -ExitCode -997 -Output @()).Type | Should -Be 'Cancelled'
+    }
+
     It 'classifies a timeout exit code' {
         (Get-ExtractionErrorType -ExitCode -998 -Output @()).Type | Should -Be 'Timeout'
     }
