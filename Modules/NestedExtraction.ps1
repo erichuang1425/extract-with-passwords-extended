@@ -155,6 +155,23 @@ function Invoke-NestedExtractionPass {
 
             $sw.Stop()
 
+            if (-not $found -and $CancelToken.IsCancellationRequested) {
+                # The user cancelled after this archive was selected but before any
+                # engine attempt succeeded. Report it as Skipped (matching the GUI's
+                # cancellation status) rather than letting it fall through to the
+                # failure branch, which would miscount a user-cancelled archive as a
+                # real extraction failure.
+                Write-Status "Nested skipped (cancelled): $archiveName" "dim"
+                Write-Log "Nested extraction cancelled for $archive" "WARN"
+                Remove-EmptyOutputDir -OutputDir $outputDir -SeparateFolders $true
+                $results.Add([PSCustomObject]@{
+                    Archive = $archive; Status = "Skipped"; OutputDir = $null
+                    Engine = $null; Password = $null; ElapsedMs = $sw.ElapsedMilliseconds
+                    Depth = $depth; IsNested = $true; Reason = "Cancelled"; EnginesInPlan = $planNames
+                })
+                break
+            }
+
             if ($found) {
                 $status = if ($winPw -eq "") { "NoPassword" } else { "Succeeded" }
                 Write-Status "Nested extracted via $winEngine -> $outputDir" "dim"
