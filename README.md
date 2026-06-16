@@ -24,6 +24,7 @@ Windows context-menu tool for extracting encrypted archives using a password lis
 - **Close confirmation** — closing the window with archives queued (or a run in progress) asks first, so nothing is discarded by accident (`confirmGuiClose`)
 - **Interactive browse interface** — file/folder browser when launched without arguments
 - **Toast notifications** — Windows notification when batch extraction completes
+- **Mid-extraction skip** — stop the active engine process and continue with the next queued archive from the GUI
 
 ### Performance
 - **Parallel archive processing** — process multiple archives concurrently via runspace pools
