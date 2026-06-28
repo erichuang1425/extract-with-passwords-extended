@@ -425,6 +425,7 @@ function Show-ExtractionGui {
 
         $succeeded = 0
         $failed = 0
+        $workerError = $null
         try {
             # Bootstrap this runspace exactly like the host script: derive the
             # paths, load the modules (which defines every engine/password
@@ -576,10 +577,14 @@ function Show-ExtractionGui {
                 }
             }
         } catch {
-            & $emit @{ Type = "Log"; Message = "Extraction error: $($_.Exception.Message)" }
-            try { Write-Log "GUI worker error: $($_.Exception.Message)" "ERROR" } catch {}
+            # An exception escaped the loop (e.g. module load failure). Record it
+            # so the Done record below carries the error and the UI reports a
+            # failed run instead of the normal success/completion path.
+            $workerError = $_.Exception.Message
+            & $emit @{ Type = "Log"; Message = "Extraction error: $workerError" }
+            try { Write-Log "GUI worker error: $workerError" "ERROR" } catch {}
         } finally {
-            & $emit @{ Type = "Done"; Succeeded = $succeeded; Failed = $failed }
+            & $emit @{ Type = "Done"; Succeeded = $succeeded; Failed = $failed; Error = $workerError }
         }
     }
 
@@ -619,12 +624,23 @@ function Show-ExtractionGui {
         $state.WorkerAsync = $null
         $state.WorkerRunspace = $null
 
-        $pbOverall.Value = 100
-        $txtOverallProgress.Text = "Done: $($result.Succeeded) succeeded, $($result.Failed) failed"
+        # Any archive that did succeed still produced output worth opening.
         if ($state.OutputFolders.Count -gt 0) {
             $btnOpenOutput.IsEnabled = $true
         }
-        Show-CompletionToast -Succeeded $result.Succeeded -Failed $result.Failed -Total $state.Total
+
+        # A worker that threw (or ended abnormally) carries an Error message; in
+        # that case report the failure rather than the normal success path, so a
+        # broken run never shows 100% with a "succeeded" toast.
+        $hadError = $result.ContainsKey("Error") -and $result.Error
+        if ($hadError) {
+            & $appendLog "Error: $($result.Error)"
+            $txtOverallProgress.Text = "Error occurred"
+        } else {
+            $pbOverall.Value = 100
+            $txtOverallProgress.Text = "Done: $($result.Succeeded) succeeded, $($result.Failed) failed"
+            Show-CompletionToast -Succeeded $result.Succeeded -Failed $result.Failed -Total $state.Total
+        }
     }
 
     # DispatcherTimer tick: drain the worker's progress records and apply them to
@@ -677,7 +693,7 @@ function Show-ExtractionGui {
         # abort), finalize anyway so the UI never stays wedged in the running
         # state.
         if ($state.WorkerAsync -and $state.WorkerAsync.IsCompleted -and $progressQueue.Count -eq 0) {
-            & $finishRun @{ Succeeded = 0; Failed = 0 }
+            & $finishRun @{ Succeeded = 0; Failed = 0; Error = "The extraction worker ended unexpectedly." }
         }
     }
 
