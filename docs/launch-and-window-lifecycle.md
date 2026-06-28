@@ -70,6 +70,31 @@ above module loading**: it catches terminating errors that occur *outside* the
 main `try/catch` (module load, `Read-Config`) and routes them through
 `Invoke-FatalExit` instead of letting the window close unannounced.
 
+## Running a scan — threading model
+
+The window pumps WPF messages on the UI thread, so the extraction work has to run
+off-thread. A `BackgroundWorker` **cannot** be used here: its `DoWork` event
+fires on a thread-pool thread that owns no PowerShell runspace, and PowerShell
+fails *while invoking the `DoWork` script-block delegate* with "There is no
+Runspace available to run scripts in this thread" — before any statement inside
+the handler (even one that tries to install a runspace) gets a chance to run. So
+a `BackgroundWorker`-based GUI can never start a scan.
+
+Instead, **Start** opens a dedicated runspace and drives it with
+`[PowerShell].BeginInvoke()`:
+
+| Piece | Thread | Why it's safe |
+|-------|--------|---------------|
+| `$extractionWorker` | dedicated runspace | `BeginInvoke` makes that runspace the executing thread's default for the whole pipeline, so every dot-sourced engine/password function runs normally. The block re-bootstraps the modules + `config.json` in its own runspace and receives all paths/choices through a single `$ctx` argument. |
+| progress reporting | dedicated → UI | The worker only enqueues plain hashtables onto a `Queue::Synchronized` and publishes the current archive's skip `CancellationTokenSource` onto a `Hashtable::Synchronized`. It never calls a WPF control or invokes a script block on the UI thread. |
+| `$drainProgress` | UI thread (DispatcherTimer) | A `DispatcherTimer` tick drains the queue and applies every UI change. It runs on the UI thread, which owns the GUI runspace, so the control updates are valid. |
+| Skip / Cancel | UI thread | The buttons read the published skip source and call `.Cancel()` (thread-safe). |
+
+There is therefore **no cross-runspace script-block marshalling anywhere** — the
+single failure mode that kept the old GUI from starting a scan is structurally
+impossible. When the run finishes (or the window closes mid-run) the worker is
+cancelled, `EndInvoke` reaps it, and the runspace is disposed.
+
 ## Uninstall
 
 The uninstaller removes both the primary (`ArchivePwExtract*`) and secondary

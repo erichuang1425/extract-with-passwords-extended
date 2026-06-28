@@ -8,6 +8,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **The GUI can finally start a scan.** Pressing **Start** did nothing useful: the
+  extraction ran on a `BackgroundWorker`, whose `DoWork` fires on a thread-pool
+  thread that owns no PowerShell runspace. PowerShell throws *"There is no
+  Runspace available to run scripts in this thread"* **while invoking the
+  `DoWork` script-block delegate itself** — before any statement inside it (such
+  as a guard that tried to install a runspace) could run — so the run aborted the
+  instant the button was clicked. The GUI now runs the extraction in its own
+  **dedicated runspace** driven by `[PowerShell].BeginInvoke()` (PowerShell makes
+  that runspace the executing thread's default for the life of the pipeline, so
+  every engine/password function works). The worker only ever touches thread-safe
+  objects — it enqueues progress records onto a synchronized queue and publishes
+  the current archive's skip token onto a synchronized hashtable — and a
+  `DispatcherTimer` on the UI thread drains the queue and applies all UI updates.
+  No PowerShell script block is ever invoked on a runspace-less thread, so the
+  runspace error can no longer occur. Skip-current, cancel, progress bars, the
+  live log, completion toast, and close-confirmation all keep working, and the
+  worker runspace is disposed when the run finishes or the window closes.
 - **Batch extraction no longer wedges partway through a large queue.** Every
   password test, extraction, and encryption probe launched an engine process
   with redirected `stdin`/`stdout`/`stderr` but never disposed it, leaking the
