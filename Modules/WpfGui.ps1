@@ -15,13 +15,12 @@ function Show-ExtractionGui {
     Add-Type -AssemblyName System.Windows.Forms
 
     # PowerShell script blocks that are converted to .NET delegates (WPF event
-    # handlers, Dispatcher callbacks, and BackgroundWorker callbacks) require a
-    # runspace on the thread that invokes them. WPF/BackgroundWorker may invoke
-    # those delegates on dispatcher or thread-pool threads where PowerShell has
-    # not installed one, which produces the runtime error "There is no Runspace
-    # available to run scripts in this thread." Capture the GUI runspace and
-    # explicitly make it the default for callback threads before any script block
-    # work runs.
+    # handlers and DispatcherTimer ticks) require a runspace on the thread that
+    # invokes them. These all fire on the GUI thread, which already owns this
+    # runspace, but capture it anyway and re-assert it as a belt-and-suspenders
+    # guard so a callback can never hit "There is no Runspace available to run
+    # scripts in this thread." (The extraction work itself runs in its own
+    # dedicated runspace — see $extractionWorker — never on a callback thread.)
     $guiRunspace = [System.Management.Automation.Runspaces.Runspace]::DefaultRunspace
     if (-not $guiRunspace) {
         $guiRunspace = [runspacefactory]::CreateRunspace()
@@ -94,9 +93,25 @@ function Show-ExtractionGui {
     $state = @{
         IsRunning = $false
         CancelSource = $null
-        SkipSource = $null
         OutputFolders = @()
+        Total = 0
+        Worker = $null
+        WorkerAsync = $null
+        WorkerRunspace = $null
+        Timer = $null
     }
+
+    # Cross-thread channels between the UI thread and the extraction worker
+    # runspace. The worker only ever touches these thread-safe .NET objects — it
+    # never calls a WPF control or invokes a PowerShell script block on the UI
+    # thread — so there is no runspace-affinity hazard.
+    #   * $progressQueue : worker enqueues plain progress records; a UI-thread
+    #                      DispatcherTimer drains them and applies UI changes.
+    #   * $shared        : a synchronized hashtable the worker uses to publish the
+    #                      current archive's skip CancellationTokenSource so the
+    #                      Skip/Cancel buttons (UI thread) can signal it.
+    $progressQueue = [System.Collections.Queue]::Synchronized((New-Object System.Collections.Queue))
+    $shared = [System.Collections.Hashtable]::Synchronized(@{ CurrentSkipSource = $null })
 
     $appendLog = {
         param([string]$msg)
@@ -386,6 +401,286 @@ function Show-ExtractionGui {
         return $Current
     }
 
+    # ----------------------------------------------------------------------
+    # The extraction worker. This script block is handed to a DEDICATED runspace
+    # (via [PowerShell].AddScript), so it is re-parsed there and must not touch
+    # any GUI-thread state directly — everything it needs arrives through the
+    # $ctx argument, and everything it reports goes back through $ctx.Queue.
+    #
+    # Why a dedicated runspace instead of a BackgroundWorker: a BackgroundWorker
+    # raises DoWork on a thread-pool thread that owns no PowerShell runspace, and
+    # PowerShell throws "There is no Runspace available to run scripts in this
+    # thread" *while invoking the DoWork script-block delegate* — before any
+    # statement inside it can install a runspace. That made the old GUI unable to
+    # start a scan at all. [PowerShell].BeginInvoke() instead runs this block
+    # inside a runspace we opened, which PowerShell makes the executing thread's
+    # default for the lifetime of the pipeline, so every cmdlet/function works.
+    # ----------------------------------------------------------------------
+    $extractionWorker = {
+        param($ctx)
+
+        $queue = $ctx.Queue
+        $shared = $ctx.Shared
+        $emit = { param($m) [void]$queue.Enqueue($m) }
+
+        $succeeded = 0
+        $failed = 0
+        try {
+            # Bootstrap this runspace exactly like the host script: derive the
+            # paths, load the modules (which defines every engine/password
+            # function and seeds the config defaults), then layer config.json and
+            # finally the GUI's per-run choices on top.
+            $p = $ctx.Paths
+            $ToolDir    = $p.ToolDir
+            $ModulesDir = $p.ModulesDir
+            $PwDir      = $p.PwDir
+            $PwFile     = $p.PwFile
+            $LogDir     = $p.LogDir
+            $ConfigFile = $p.ConfigFile
+            $CacheFile  = $p.CacheFile
+            $RunLogPath = $p.RunLogPath
+            $RunStamp   = $p.RunStamp
+
+            . "$ModulesDir\Config.ps1"
+            . "$ModulesDir\Logging.ps1"
+            . "$ModulesDir\ConsoleUI.ps1"
+            . "$ModulesDir\ArchiveUtils.ps1"
+            . "$ModulesDir\Extraction.ps1"
+            . "$ModulesDir\Passwords.ps1"
+            . "$ModulesDir\NestedExtraction.ps1"
+            . "$ModulesDir\Parallel.ps1"
+            . "$ModulesDir\PowerManagement.ps1"
+
+            Read-Config
+
+            # The GUI's pre-extraction dialog choices win over config.json.
+            foreach ($k in $ctx.Overrides.Keys) {
+                Set-Variable -Name $k -Value $ctx.Overrides[$k]
+            }
+
+            $items = $ctx.Items
+            $token = $ctx.CancelToken
+            $separateFolders = [bool]$ctx.SeparateFolders
+            $commonOutputDir = $ctx.CommonOutputDir
+            $useCustomOutputDir = [bool]$ctx.UseCustomOutputDir
+            $customOutputBase = $ctx.CustomOutputBase
+            $passwords = @(Get-Passwords)
+
+            $sevenZip = Get-NormalSevenZipPath
+            $peaZip7z = Get-PeaZipBundledSevenZipPath
+            $winRar = Get-WinRarOrUnRarPath
+
+            for ($i = 0; $i -lt $items.Count; $i++) {
+                if ($token.IsCancellationRequested) { break }
+
+                $archive = $items[$i]
+                $skipSource = New-Object System.Threading.CancellationTokenSource
+                # Publish the per-archive skip source so the Skip/Cancel buttons
+                # on the UI thread can signal just this archive.
+                $shared.CurrentSkipSource = $skipSource
+                $attemptToken = $skipSource.Token
+                $sw = [System.Diagnostics.Stopwatch]::StartNew()
+                try {
+                    & $emit @{ Type = "Status"; Index = $i; Text = "Testing..."; Overall = [math]::Floor(($i / $items.Count) * 100) }
+
+                    $enginePlan = @(Get-EnginePlanForArchive -Archive $archive -SevenZip $sevenZip -PeaZip7z $peaZip7z -WinRar $winRar)
+                    if ($enginePlan.Count -eq 0) {
+                        $sw.Stop()
+                        & $emit @{ Type = "Result"; Index = $i; Status = "No Engine"; Password = ""; RealPassword = ""; Time = (Format-Elapsed $sw) }
+                        $failed++
+                        continue
+                    }
+
+                    $archiveDir = Split-Path $archive -Parent
+                    $archiveBase = Get-ArchiveBaseName $archive
+                    if ($separateFolders) {
+                        $outputBaseDir = if ($useCustomOutputDir) { $customOutputBase } else { $archiveDir }
+                        $outputDir = Join-Path $outputBaseDir $archiveBase
+                        $outputDir = Resolve-OutputDir -BaseDir $outputDir -IsSharedOutput $false
+                    } else {
+                        $outputDir = Resolve-OutputDir -BaseDir $commonOutputDir -IsSharedOutput $true
+                    }
+
+                    $isEncryptable = Test-IsEncryptionCapable $archive
+                    if ($isEncryptable -and $CheckEncryptionBeforeCycling -and $sevenZip) {
+                        $enc = Test-ArchiveIsEncrypted -Archive $archive -SevenZipPath $sevenZip -CancelToken $attemptToken
+                        if ($enc -eq $false) { $isEncryptable = $false }
+                    }
+
+                    $found = $false
+
+                    # The encryption probe above runs its own engine process; if the
+                    # user pressed Skip Current/Cancel while it was running, stop now
+                    # instead of cycling passwords on this archive.
+                    if ($attemptToken.IsCancellationRequested -or $token.IsCancellationRequested) {
+                        $sw.Stop()
+                        & $emit @{ Type = "Result"; Index = $i; Status = "Skipped"; Password = ""; RealPassword = ""; Time = (Format-Elapsed $sw) }
+                        Remove-EmptyOutputDir -OutputDir $outputDir -SeparateFolders $separateFolders
+                        continue
+                    }
+
+                    if (-not $isEncryptable) {
+                        foreach ($engine in $enginePlan) {
+                            $ok = Try-EnginePassword -EngineName $engine.Name -EnginePath $engine.Path -Archive $archive -Password "" -OutputDir $outputDir -CanClearFailedOutput $separateFolders -OmitPasswordArg $true -Timeout $ExtractionTimeoutSeconds -CancelToken $attemptToken
+                            if ($attemptToken.IsCancellationRequested) { break }
+                            if ($ok) {
+                                $sw.Stop()
+                                & $emit @{ Type = "Result"; Index = $i; Status = "Success"; Password = "(none)"; RealPassword = ""; Time = (Format-Elapsed $sw); OutputDir = $outputDir }
+                                $succeeded++
+                                $found = $true
+                                break
+                            }
+                        }
+                    } else {
+                        $pwIndex = 0
+                        foreach ($pw in $passwords) {
+                            if ($token.IsCancellationRequested) { break }
+                            $pwIndex++
+
+                            $currentPct = [math]::Floor(($pwIndex / $passwords.Count) * 100)
+                            & $emit @{ Type = "Password"; Index = $i; Current = $pwIndex; Total = $passwords.Count; Pct = $currentPct }
+
+                            foreach ($engine in $enginePlan) {
+                                $testOk = Try-EnginePassword -EngineName $engine.Name -EnginePath $engine.Path -Archive $archive -Password $pw -OutputDir $outputDir -CanClearFailedOutput $separateFolders -Timeout $ExtractionTimeoutSeconds -TestOnly $true -CancelToken $attemptToken
+                                if ($attemptToken.IsCancellationRequested) { break }
+                                if ($testOk) {
+                                    $extractOk = Try-EnginePassword -EngineName $engine.Name -EnginePath $engine.Path -Archive $archive -Password $pw -OutputDir $outputDir -CanClearFailedOutput $separateFolders -Timeout $ExtractionTimeoutSeconds -TestOnly $false -CancelToken $attemptToken
+                                    if ($extractOk) {
+                                        $sw.Stop()
+                                        $masked = Format-MaskedPassword $pw
+                                        Save-PasswordToCache $pw
+                                        & $emit @{ Type = "Result"; Index = $i; Status = "Success"; Password = $masked; RealPassword = $pw; Time = (Format-Elapsed $sw); OutputDir = $outputDir }
+                                        $succeeded++
+                                        $found = $true
+                                        break
+                                    }
+                                }
+                            }
+                            if ($found -or $attemptToken.IsCancellationRequested) { break }
+                        }
+                    }
+
+                    if ($attemptToken.IsCancellationRequested) {
+                        $sw.Stop()
+                        & $emit @{ Type = "Result"; Index = $i; Status = "Skipped"; Password = ""; RealPassword = ""; Time = (Format-Elapsed $sw) }
+                        Remove-EmptyOutputDir -OutputDir $outputDir -SeparateFolders $separateFolders
+                    } elseif (-not $found) {
+                        $sw.Stop()
+                        & $emit @{ Type = "Result"; Index = $i; Status = "Failed"; Password = ""; RealPassword = ""; Time = (Format-Elapsed $sw) }
+                        Remove-EmptyOutputDir -OutputDir $outputDir -SeparateFolders $separateFolders
+                        $failed++
+                    }
+                } finally {
+                    $shared.CurrentSkipSource = $null
+                    $skipSource.Dispose()
+                }
+            }
+        } catch {
+            & $emit @{ Type = "Log"; Message = "Extraction error: $($_.Exception.Message)" }
+            try { Write-Log "GUI worker error: $($_.Exception.Message)" "ERROR" } catch {}
+        } finally {
+            & $emit @{ Type = "Done"; Succeeded = $succeeded; Failed = $failed }
+        }
+    }
+
+    # Tear down a finished worker run and restore the idle UI state. Runs on the
+    # UI thread (called from the DispatcherTimer tick).
+    $finishRun = {
+        param($result)
+        if ($state.Timer) { try { $state.Timer.Stop() } catch {} ; $state.Timer = $null }
+        $state.IsRunning = $false
+        $shared.CurrentSkipSource = $null
+        $btnStart.IsEnabled = $true
+        $btnCancel.IsEnabled = $false
+        $btnSkip.IsEnabled = $false
+        $btnAddFiles.IsEnabled = $true
+        $btnAddFolder.IsEnabled = $true
+        $btnRemove.IsEnabled = $true
+        $btnClear.IsEnabled = $true
+        $pbCurrent.Value = 0
+        $txtCurrentProgress.Text = ""
+
+        # Reap the pipeline and surface anything it wrote to the error stream.
+        if ($state.Worker) {
+            try {
+                if ($state.WorkerAsync) { $state.Worker.EndInvoke($state.WorkerAsync) }
+            } catch {
+                & $appendLog "Worker error: $($_.Exception.Message)"
+            }
+            try {
+                foreach ($werr in @($state.Worker.Streams.Error)) {
+                    & $appendLog "Worker: $($werr.ToString())"
+                }
+            } catch {}
+            try { $state.Worker.Dispose() } catch {}
+        }
+        try { if ($state.WorkerRunspace) { $state.WorkerRunspace.Dispose() } } catch {}
+        $state.Worker = $null
+        $state.WorkerAsync = $null
+        $state.WorkerRunspace = $null
+
+        $pbOverall.Value = 100
+        $txtOverallProgress.Text = "Done: $($result.Succeeded) succeeded, $($result.Failed) failed"
+        if ($state.OutputFolders.Count -gt 0) {
+            $btnOpenOutput.IsEnabled = $true
+        }
+        Show-CompletionToast -Succeeded $result.Succeeded -Failed $result.Failed -Total $state.Total
+    }
+
+    # DispatcherTimer tick: drain the worker's progress records and apply them to
+    # the UI. Always runs on the UI thread, which owns the GUI runspace, so the
+    # control updates here are safe.
+    $drainProgress = {
+        & $ensureGuiRunspace
+        while ($progressQueue.Count -gt 0) {
+            $data = $progressQueue.Dequeue()
+            switch ($data.Type) {
+                "Status" {
+                    $idx = $data.Index
+                    if ($idx -lt $archiveItems.Count) {
+                        $archiveItems[$idx].Status = $data.Text
+                        $dgArchives.Items.Refresh()
+                    }
+                    $pbOverall.Value = $data.Overall
+                    $txtOverallProgress.Text = "Processing archive $($idx + 1) / $($state.Total)"
+                }
+                "Password" {
+                    $pbCurrent.Value = $data.Pct
+                    $txtCurrentProgress.Text = "Password $($data.Current) / $($data.Total)"
+                }
+                "Result" {
+                    $idx = $data.Index
+                    if ($idx -lt $archiveItems.Count) {
+                        $item = $archiveItems[$idx]
+                        $item.Status = $data.Status
+                        $item.Password = $data.Password
+                        if ($data.ContainsKey("RealPassword")) { $item.RealPassword = $data.RealPassword }
+                        $item.Time = $data.Time
+                        if ($data.OutputDir) { $item.OutputDir = $data.OutputDir }
+                        $dgArchives.Items.Refresh()
+                        & $appendLog "[$($data.Status)] $($item.Name) ($($data.Time))"
+                    }
+                    if ($data.OutputDir) {
+                        $state.OutputFolders += $data.OutputDir
+                    }
+                }
+                "Log" {
+                    & $appendLog $data.Message
+                }
+                "Done" {
+                    & $finishRun $data
+                    return
+                }
+            }
+        }
+        # Backstop: if the pipeline ended without emitting a Done record (a hard
+        # abort), finalize anyway so the UI never stays wedged in the running
+        # state.
+        if ($state.WorkerAsync -and $state.WorkerAsync.IsCompleted -and $progressQueue.Count -eq 0) {
+            & $finishRun @{ Succeeded = 0; Failed = 0 }
+        }
+    }
+
     $btnStart.Add_Click({
         if ($state.IsRunning) { return }
         if ($archiveItems.Count -eq 0) {
@@ -476,6 +771,7 @@ function Show-ExtractionGui {
         $state.IsRunning = $true
         $state.CancelSource = New-Object System.Threading.CancellationTokenSource
         $state.OutputFolders = @()
+        $shared.CurrentSkipSource = $null
         $btnStart.IsEnabled = $false
         $btnCancel.IsEnabled = $true
         $btnSkip.IsEnabled = $true
@@ -486,230 +782,63 @@ function Show-ExtractionGui {
         $btnClear.IsEnabled = $false
 
         $total = $archiveItems.Count
+        $state.Total = $total
+        $progressQueue.Clear()
 
-        $worker = New-Object System.ComponentModel.BackgroundWorker
-        $worker.WorkerReportsProgress = $true
-
-        $worker.Add_DoWork({
-            param($s, $e)
-            & $ensureGuiRunspace
-            $workArgs = $e.Argument
-            $items = $workArgs.Items
-            $token = $workArgs.CancelToken
-            $separateFolders = [bool]$workArgs.SeparateFolders
-            $commonOutputDir = $workArgs.CommonOutputDir
-            $useCustomOutputDir = [bool]$workArgs.UseCustomOutputDir
-            $customOutputBase = $workArgs.CustomOutputBase
-            $passwords = @(Get-Passwords)
-
-            $sevenZip = Get-NormalSevenZipPath
-            $peaZip7z = Get-PeaZipBundledSevenZipPath
-            $winRar = Get-WinRarOrUnRarPath
-
-            $succeeded = 0
-            $failed = 0
-
-            for ($i = 0; $i -lt $items.Count; $i++) {
-                if ($token.IsCancellationRequested) { break }
-
-                $archive = $items[$i]
-                $skipSource = New-Object System.Threading.CancellationTokenSource
-                # Marshal the per-archive cancellation source through
-                # BackgroundWorker's normal progress channel. Invoking a
-                # PowerShell script block directly on Dispatcher/worker threads
-                # can fail because those threads do not own a PowerShell
-                # runspace ("There is no Runspace available...").
-                $s.ReportProgress(0, @{ Type = "CurrentSkipSource"; Source = $skipSource })
-                $attemptToken = $skipSource.Token
-                $sw = [System.Diagnostics.Stopwatch]::StartNew()
-
-                $s.ReportProgress(0, @{ Type = "Status"; Index = $i; Text = "Testing..."; Overall = [math]::Floor(($i / $items.Count) * 100) })
-
-                $enginePlan = @(Get-EnginePlanForArchive -Archive $archive -SevenZip $sevenZip -PeaZip7z $peaZip7z -WinRar $winRar)
-                if ($enginePlan.Count -eq 0) {
-                    $sw.Stop()
-                    $s.ReportProgress(0, @{ Type = "Result"; Index = $i; Status = "No Engine"; Password = ""; RealPassword = ""; Time = (Format-Elapsed $sw) })
-                    $s.ReportProgress(0, @{ Type = "CurrentSkipSource"; Source = $null })
-                    $skipSource.Dispose()
-                    $failed++
-                    continue
-                }
-
-                $archiveDir = Split-Path $archive -Parent
-                $archiveBase = Get-ArchiveBaseName $archive
-                if ($separateFolders) {
-                    $outputBaseDir = if ($useCustomOutputDir) { $customOutputBase } else { $archiveDir }
-                    $outputDir = Join-Path $outputBaseDir $archiveBase
-                    $outputDir = Resolve-OutputDir -BaseDir $outputDir -IsSharedOutput $false
-                } else {
-                    $outputDir = Resolve-OutputDir -BaseDir $commonOutputDir -IsSharedOutput $true
-                }
-
-                $isEncryptable = Test-IsEncryptionCapable $archive
-                if ($isEncryptable -and $CheckEncryptionBeforeCycling -and $sevenZip) {
-                    $enc = Test-ArchiveIsEncrypted -Archive $archive -SevenZipPath $sevenZip -CancelToken $attemptToken
-                    if ($enc -eq $false) { $isEncryptable = $false }
-                }
-
-                $found = $false
-
-                # The encryption probe above runs its own engine process; if the
-                # user pressed Skip Current/Cancel while it was running, stop now
-                # instead of cycling passwords or launching further engine
-                # processes on this archive.
-                if ($attemptToken.IsCancellationRequested -or $token.IsCancellationRequested) {
-                    $sw.Stop()
-                    $s.ReportProgress(0, @{ Type = "Result"; Index = $i; Status = "Skipped"; Password = ""; RealPassword = ""; Time = (Format-Elapsed $sw) })
-                    Remove-EmptyOutputDir -OutputDir $outputDir -SeparateFolders $separateFolders
-                    $s.ReportProgress(0, @{ Type = "CurrentSkipSource"; Source = $null })
-                    $skipSource.Dispose()
-                    continue
-                }
-
-                if (-not $isEncryptable) {
-                    foreach ($engine in $enginePlan) {
-                        $ok = Try-EnginePassword -EngineName $engine.Name -EnginePath $engine.Path -Archive $archive -Password "" -OutputDir $outputDir -CanClearFailedOutput $separateFolders -OmitPasswordArg $true -Timeout $ExtractionTimeoutSeconds -CancelToken $attemptToken
-                        if ($attemptToken.IsCancellationRequested) { break }
-                        if ($ok) {
-                            $sw.Stop()
-                            $s.ReportProgress(0, @{ Type = "Result"; Index = $i; Status = "Success"; Password = "(none)"; RealPassword = ""; Time = (Format-Elapsed $sw); OutputDir = $outputDir })
-                            $succeeded++
-                            $found = $true
-                            break
-                        }
-                    }
-                } else {
-                    $pwIndex = 0
-                    foreach ($pw in $passwords) {
-                        if ($token.IsCancellationRequested) { break }
-                        $pwIndex++
-
-                        $currentPct = [math]::Floor(($pwIndex / $passwords.Count) * 100)
-                        $s.ReportProgress(0, @{ Type = "Password"; Index = $i; Current = $pwIndex; Total = $passwords.Count; Pct = $currentPct })
-
-                        foreach ($engine in $enginePlan) {
-                            $testOk = Try-EnginePassword -EngineName $engine.Name -EnginePath $engine.Path -Archive $archive -Password $pw -OutputDir $outputDir -CanClearFailedOutput $separateFolders -Timeout $ExtractionTimeoutSeconds -TestOnly $true -CancelToken $attemptToken
-                            if ($attemptToken.IsCancellationRequested) { break }
-                            if ($testOk) {
-                                $extractOk = Try-EnginePassword -EngineName $engine.Name -EnginePath $engine.Path -Archive $archive -Password $pw -OutputDir $outputDir -CanClearFailedOutput $separateFolders -Timeout $ExtractionTimeoutSeconds -TestOnly $false -CancelToken $attemptToken
-                                if ($extractOk) {
-                                    $sw.Stop()
-                                    $masked = Format-MaskedPassword $pw
-                                    Save-PasswordToCache $pw
-                                    $s.ReportProgress(0, @{ Type = "Result"; Index = $i; Status = "Success"; Password = $masked; RealPassword = $pw; Time = (Format-Elapsed $sw); OutputDir = $outputDir })
-                                    $succeeded++
-                                    $found = $true
-                                    break
-                                }
-                            }
-                        }
-                        if ($found -or $attemptToken.IsCancellationRequested) { break }
-                    }
-                }
-
-                if ($attemptToken.IsCancellationRequested) {
-                    $sw.Stop()
-                    $s.ReportProgress(0, @{ Type = "Result"; Index = $i; Status = "Skipped"; Password = ""; RealPassword = ""; Time = (Format-Elapsed $sw) })
-                    Remove-EmptyOutputDir -OutputDir $outputDir -SeparateFolders $separateFolders
-                } elseif (-not $found) {
-                    $sw.Stop()
-                    $s.ReportProgress(0, @{ Type = "Result"; Index = $i; Status = "Failed"; Password = ""; RealPassword = ""; Time = (Format-Elapsed $sw) })
-                    Remove-EmptyOutputDir -OutputDir $outputDir -SeparateFolders $separateFolders
-                    $failed++
-                }
-                $s.ReportProgress(0, @{ Type = "CurrentSkipSource"; Source = $null })
-                $skipSource.Dispose()
-            }
-
-            $e.Result = @{ Succeeded = $succeeded; Failed = $failed }
-        })
-
-        $worker.Add_ProgressChanged({
-            param($s, $e)
-            & $ensureGuiRunspace
-            $data = $e.UserState
-            switch ($data.Type) {
-                "CurrentSkipSource" {
-                    $state.SkipSource = $data.Source
-                }
-                "Status" {
-                    $idx = $data.Index
-                    if ($idx -lt $archiveItems.Count) {
-                        $item = $archiveItems[$idx]
-                        $item.Status = $data.Text
-                        $dgArchives.Items.Refresh()
-                    }
-                    $pbOverall.Value = $data.Overall
-                    $txtOverallProgress.Text = "Processing archive $($idx + 1) / $total"
-                }
-                "Password" {
-                    $pbCurrent.Value = $data.Pct
-                    $txtCurrentProgress.Text = "Password $($data.Current) / $($data.Total)"
-                }
-                "Result" {
-                    $idx = $data.Index
-                    if ($idx -lt $archiveItems.Count) {
-                        $item = $archiveItems[$idx]
-                        $item.Status = $data.Status
-                        $item.Password = $data.Password
-                        if ($data.ContainsKey("RealPassword")) { $item.RealPassword = $data.RealPassword }
-                        $item.Time = $data.Time
-                        if ($data.OutputDir) { $item.OutputDir = $data.OutputDir }
-                        $dgArchives.Items.Refresh()
-                    }
-                    if ($data.OutputDir) {
-                        $state.OutputFolders += $data.OutputDir
-                    }
-                    & $appendLog "[$($data.Status)] $($archiveItems[$idx].Name) ($($data.Time))"
-                }
-            }
-        })
-
-        $worker.Add_RunWorkerCompleted({
-            param($s, $e)
-            & $ensureGuiRunspace
-            $state.IsRunning = $false
-            $btnStart.IsEnabled = $true
-            $btnCancel.IsEnabled = $false
-            $btnSkip.IsEnabled = $false
-            $state.SkipSource = $null
-            $btnAddFiles.IsEnabled = $true
-            $btnAddFolder.IsEnabled = $true
-            $btnRemove.IsEnabled = $true
-            $btnClear.IsEnabled = $true
-            $pbCurrent.Value = 0
-            $txtCurrentProgress.Text = ""
-
-            if ($e.Error) {
-                & $appendLog "Error: $($e.Error.Message)"
-                $pbOverall.Value = 0
-                $txtOverallProgress.Text = "Error occurred"
-            } else {
-                $r = $e.Result
-                $pbOverall.Value = 100
-                $txtOverallProgress.Text = "Done: $($r.Succeeded) succeeded, $($r.Failed) failed"
-                if ($state.OutputFolders.Count -gt 0) {
-                    $btnOpenOutput.IsEnabled = $true
-                }
-                Show-CompletionToast -Succeeded $r.Succeeded -Failed $r.Failed -Total $total
-            }
-        })
-
-        $worker.RunWorkerAsync(@{
-            Items = $archives
-            CancelToken = $state.CancelSource.Token
-            SeparateFolders = $separateFolders
-            CommonOutputDir = $commonOutputDir
+        # Everything the worker runspace needs, marshalled as plain data.
+        $ctx = @{
+            Items              = $archives
+            CancelToken        = $state.CancelSource.Token
+            SeparateFolders    = $separateFolders
+            CommonOutputDir    = $commonOutputDir
             UseCustomOutputDir = $useCustomOutputDir
-            CustomOutputBase = $customOutputBase
-        })
+            CustomOutputBase   = $customOutputBase
+            Queue              = $progressQueue
+            Shared             = $shared
+            Paths              = @{
+                ToolDir    = $ToolDir
+                ModulesDir = $ModulesDir
+                PwDir      = $PwDir
+                PwFile     = $PwFile
+                LogDir     = $LogDir
+                ConfigFile = $ConfigFile
+                CacheFile  = $CacheFile
+                RunLogPath = $RunLogPath
+                RunStamp   = $RunStamp
+            }
+            Overrides          = @{
+                ExistingOutputBehavior = $ExistingOutputBehavior
+                SevenZipOverwriteMode  = $SevenZipOverwriteMode
+                WinRarOverwriteMode    = $WinRarOverwriteMode
+            }
+        }
+
+        $rs = [runspacefactory]::CreateRunspace()
+        $rs.ApartmentState = [System.Threading.ApartmentState]::MTA
+        $rs.ThreadOptions = [System.Management.Automation.Runspaces.PSThreadOptions]::ReuseThread
+        $rs.Open()
+
+        $ps = [powershell]::Create()
+        $ps.Runspace = $rs
+        [void]$ps.AddScript($extractionWorker).AddArgument($ctx)
+
+        $state.Worker = $ps
+        $state.WorkerRunspace = $rs
+        $state.WorkerAsync = $ps.BeginInvoke()
+
+        # Poll the worker's progress queue on the UI thread.
+        $state.Timer = New-Object System.Windows.Threading.DispatcherTimer
+        $state.Timer.Interval = [TimeSpan]::FromMilliseconds(120)
+        $state.Timer.Add_Tick($drainProgress)
+        $state.Timer.Start()
     })
 
     $btnCancel.Add_Click({
         if ($state.CancelSource) {
             $state.CancelSource.Cancel()
-            if ($state.SkipSource) {
-                try { $state.SkipSource.Cancel() } catch {}
+            $cur = $shared.CurrentSkipSource
+            if ($cur) {
+                try { $cur.Cancel() } catch {}
             }
             & $appendLog "Cancellation requested..."
             $btnCancel.IsEnabled = $false
@@ -717,9 +846,12 @@ function Show-ExtractionGui {
     })
 
     $btnSkip.Add_Click({
-        if ($state.IsRunning -and $state.SkipSource) {
-            try { $state.SkipSource.Cancel() } catch {}
-            & $appendLog "Skipping the current archive..."
+        if ($state.IsRunning) {
+            $cur = $shared.CurrentSkipSource
+            if ($cur) {
+                try { $cur.Cancel() } catch {}
+                & $appendLog "Skipping the current archive..."
+            }
         }
     })
 
@@ -744,8 +876,9 @@ function Show-ExtractionGui {
                 return
             }
             if ($state.CancelSource) { $state.CancelSource.Cancel() }
-            if ($state.SkipSource) {
-                try { $state.SkipSource.Cancel() } catch {}
+            $cur = $shared.CurrentSkipSource
+            if ($cur) {
+                try { $cur.Cancel() } catch {}
             }
         } elseif ($ConfirmGuiClose -and $archiveItems.Count -gt 0) {
             $r = [System.Windows.MessageBox]::Show(
@@ -772,4 +905,17 @@ function Show-ExtractionGui {
     & $updateCount
 
     [void]$window.ShowDialog()
+
+    # The window has closed. If a run was still in flight (the user closed
+    # mid-extraction and confirmed), make sure the worker is cancelled and its
+    # runspace disposed so nothing is left running in the background.
+    if ($state.Timer) { try { $state.Timer.Stop() } catch {} }
+    if ($state.CancelSource) { try { $state.CancelSource.Cancel() } catch {} }
+    $cur = $shared.CurrentSkipSource
+    if ($cur) { try { $cur.Cancel() } catch {} }
+    if ($state.Worker) {
+        try { if ($state.WorkerAsync) { $state.Worker.EndInvoke($state.WorkerAsync) } } catch {}
+        try { $state.Worker.Dispose() } catch {}
+    }
+    if ($state.WorkerRunspace) { try { $state.WorkerRunspace.Dispose() } catch {} }
 }
