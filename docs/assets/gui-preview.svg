@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="560" viewBox="0 0 1120 560" role="img" aria-labelledby="title desc">
+  <title id="title">Extract with Passwords Extended interface preview</title>
+  <desc id="desc">A stylized preview of the Windows archive extraction queue, progress bars, and run log.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#101820"/>
+      <stop offset="1" stop-color="#243447"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#32b4ff"/>
+      <stop offset="1" stop-color="#71e6a2"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="18" stdDeviation="18" flood-color="#000000" flood-opacity="0.28"/>
+    </filter>
+  </defs>
+  <rect width="1120" height="560" fill="url(#bg)"/>
+  <g filter="url(#shadow)">
+    <rect x="92" y="70" width="936" height="420" rx="12" fill="#f7f9fb"/>
+    <rect x="92" y="70" width="936" height="52" rx="12" fill="#182635"/>
+    <rect x="92" y="110" width="936" height="12" fill="#182635"/>
+    <circle cx="122" cy="96" r="7" fill="#ff6b6b"/>
+    <circle cx="146" cy="96" r="7" fill="#ffd166"/>
+    <circle cx="170" cy="96" r="7" fill="#65d789"/>
+    <text x="210" y="102" font-family="Segoe UI, Arial, sans-serif" font-size="18" font-weight="700" fill="#ffffff">Extract with Passwords Extended</text>
+
+    <rect x="118" y="146" width="246" height="318" rx="8" fill="#ffffff" stroke="#d7dee8"/>
+    <text x="140" y="178" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#17212b">Queue</text>
+    <rect x="140" y="198" width="198" height="38" rx="6" fill="#eef6ff"/>
+    <text x="156" y="222" font-family="Segoe UI, Arial, sans-serif" font-size="13" fill="#22313f">photos.part01.rar</text>
+    <rect x="140" y="246" width="198" height="38" rx="6" fill="#f5f7fa"/>
+    <text x="156" y="270" font-family="Segoe UI, Arial, sans-serif" font-size="13" fill="#22313f">backup.7z</text>
+    <rect x="140" y="294" width="198" height="38" rx="6" fill="#f5f7fa"/>
+    <text x="156" y="318" font-family="Segoe UI, Arial, sans-serif" font-size="13" fill="#22313f">bundle.zip</text>
+    <rect x="140" y="410" width="92" height="32" rx="6" fill="#182635"/>
+    <text x="166" y="431" font-family="Segoe UI, Arial, sans-serif" font-size="13" font-weight="700" fill="#ffffff">Start</text>
+    <rect x="246" y="410" width="92" height="32" rx="6" fill="#edf1f5"/>
+    <text x="274" y="431" font-family="Segoe UI, Arial, sans-serif" font-size="13" fill="#22313f">Skip</text>
+
+    <rect x="390" y="146" width="612" height="154" rx="8" fill="#ffffff" stroke="#d7dee8"/>
+    <text x="418" y="180" font-family="Segoe UI, Arial, sans-serif" font-size="16" font-weight="700" fill="#17212b">Current archive</text>
+    <text x="418" y="212" font-family="Segoe UI, Arial, sans-serif" font-size="14" fill="#44576a">Testing password candidates with 7-Zip</text>
+    <rect x="418" y="236" width="520" height="14" rx="7" fill="#e4eaf1"/>
+    <rect x="418" y="236" width="338" height="14" rx="7" fill="url(#accent)"/>
+    <text x="946" y="250" font-family="Segoe UI, Arial, sans-serif" font-size="13" fill="#44576a">65%</text>
+    <rect x="418" y="268" width="520" height="14" rx="7" fill="#e4eaf1"/>
+    <rect x="418" y="268" width="224" height="14" rx="7" fill="#32b4ff"/>
+    <text x="946" y="282" font-family="Segoe UI, Arial, sans-serif" font-size="13" fill="#44576a">batch 43%</text>
+
+    <rect x="390" y="324" width="612" height="140" rx="8" fill="#111820"/>
+    <text x="418" y="356" font-family="Consolas, monospace" font-size="14" fill="#71e6a2">[+] password matched from cache</text>
+    <text x="418" y="386" font-family="Consolas, monospace" font-size="14" fill="#d6e1eb">[*] extracting to photos</text>
+    <text x="418" y="416" font-family="Consolas, monospace" font-size="14" fill="#d6e1eb">[*] nested archive scan queued</text>
+    <text x="418" y="446" font-family="Consolas, monospace" font-size="14" fill="#ffd166">[!] one split volume missing in backup.7z</text>
+  </g>
+</svg>

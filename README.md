@@ -2,379 +2,197 @@
 
 [![CI](https://github.com/erichuang1425/extract-with-passwords-extended/actions/workflows/ci.yml/badge.svg)](https://github.com/erichuang1425/extract-with-passwords-extended/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/erichuang1425/extract-with-passwords-extended?sort=semver)](https://github.com/erichuang1425/extract-with-passwords-extended/releases/latest)
+[![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-5391FE)](https://learn.microsoft.com/powershell/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-Windows context-menu tool for extracting encrypted archives using a password list. Supports multiple extraction engines with automatic fallback.
+Extract with Passwords Extended is a Windows archive extractor built for the awkward real-world case: a folder full of ZIP, RAR, 7z, split-volume, and nested archives where the right password might be somewhere in a list.
 
-## Features
+It adds Explorer right-click actions, a native WPF queue UI, console mode, password-list automation, multi-engine fallback, and careful logging so long extraction runs are easier to start, monitor, and recover from.
 
-### Core
-- **Multi-engine support** — 7-Zip, WinRAR/UnRAR, and PeaZip's bundled 7z with automatic fallback chain
-- **Windows context menu integration** — right-click any archive to extract with password list
-- **Batch folder processing** — right-click a folder to scan and extract all archives inside
-- **Format-aware password testing** — non-encryption formats (tar, gz, cab, iso, etc.) skip password cycling entirely
-- **Header-based encryption detection** — inspects archive headers to skip password cycling on unencrypted archives
-- **Test-only-then-extract** — finds the correct password via lightweight test commands, then extracts once
-- **Recursive nested-archive extraction** — optionally extracts archives found inside extracted output (e.g. a `.zip` containing `.rar` files), bounded by a configurable depth and reusing the parent's password
-- **Error classification** — distinguishes wrong password vs corrupt archive vs timeout vs missing volume
+![GUI preview](docs/assets/gui-preview.svg)
 
-### GUI
-- **WPF GUI mode** — native Windows GUI with archive list, dual progress bars, live log viewer, and drag-and-drop
-- **The right-click menu opens the GUI by default** — *"Extract with password list"* launches the window (with no flashing console, via a hidden VBS shim) and your selection already queued; *"Extract in console (password list)"* is the secondary text-mode entry
-- **Right-click row actions** — open the output folder or file location, copy the recovered password or archive path, and remove queued items
-- **Close confirmation** — closing the window with archives queued (or a run in progress) asks first, so nothing is discarded by accident (`confirmGuiClose`)
-- **Interactive browse interface** — file/folder browser when launched without arguments
-- **Toast notifications** — Windows notification when batch extraction completes
-- **Mid-extraction skip** — stop the active engine process and continue with the next queued archive from the GUI
-- **Console-equivalent start choices** — the GUI honors the same pre-extraction prompts for confirmation, output directory, separate vs. shared output folders, and existing-folder behavior
+## Why It Exists
 
-### Performance
-- **Parallel archive processing** — process multiple archives concurrently via runspace pools
-- **Parallel password testing** — test multiple passwords simultaneously against a single archive
-- **Password cache** — remembers successful passwords across sessions; tries cached passwords first
-- **Session-local password reordering** — last successful password is tried first on the next archive
-- **Large archive strategies** — detects large archives and adjusts strategy to avoid repeated disk writes
+Archive tools are excellent once you already know the right password. They are less pleasant when you need to try a curated password list across a batch, keep track of split sets, avoid re-extracting giant files after each failed attempt, and understand why one archive failed while the rest succeeded.
 
-### Logging
-- **Condensed logging** — suppresses repetitive "Wrong password" errors from engine output into a single summary line
-- **Structured per-attempt logs** — one line per password attempt instead of full engine dumps
-- **Verbose mode** — `verboseEngineLogging` config option restores full engine output when needed
+This project wraps 7-Zip, WinRAR/UnRAR, and PeaZip's bundled 7z with a PowerShell workflow designed for repeatable extraction jobs on Windows.
 
-### Other
-- **Modular architecture** — separate module files for maintainability
-- **Split/multi-volume archive support** — `.001`, `.part01.rar`, and other split formats with volume validation
-- **External JSON configuration** — settings stored in `config.json` that survive reinstalls
-- **Masked password display** — found passwords are masked in console output by default
-- **Send To shortcut** — drag-and-drop archives via the Windows Send To menu
-- **Robust installer** — reports which context menu registrations succeeded or failed
+## Highlights
+
+- Explorer integration for archive files, folders, and folder backgrounds.
+- WPF GUI with queue management, drag and drop, dual progress bars, live log output, skip/cancel controls, and row actions.
+- Console mode for scriptable or keyboard-first workflows.
+- Password-list cycling with optional no-password attempt, cache-first retries, and session-local reordering.
+- Multi-engine fallback across 7-Zip, WinRAR/UnRAR, and PeaZip's bundled 7z.
+- Header-based encryption checks so unencrypted ZIP/RAR/7z files skip password cycling.
+- Test-only-then-extract mode to avoid repeated writes for every failed password.
+- Split and multi-volume archive detection, including `.001`, `.part01.rar`, and related patterns.
+- Optional recursive nested extraction with depth limits and payload-aware stopping.
+- Clear failure classification for wrong password, corrupt archive, timeout, missing volume, permission errors, and engine failures.
+- Configurable post-extraction actions, output folder naming rules, engine priority, logging, and parallelism.
+
+## Tech Stack
+
+- PowerShell 5.1+ compatible scripts and modules
+- WPF/XAML for the Windows GUI
+- 7-Zip, WinRAR/UnRAR, and PeaZip integration through command-line engine calls
+- Pester unit tests for logic-heavy modules
+- PSScriptAnalyzer linting
+- GitHub Actions for CI and release packaging
 
 ## Requirements
 
-- **Windows 10 or 11**
-- **PowerShell 3.0+** (5.0+ recommended for clipboard features and toast notifications)
-- At least one extraction engine installed:
-  - [7-Zip](https://www.7-zip.org/) (recommended)
+- Windows 10 or Windows 11
+- PowerShell 5.1 or newer recommended
+- At least one supported extraction engine:
+  - [7-Zip](https://www.7-zip.org/) recommended
   - [WinRAR](https://www.win-rar.com/)
-  - [PeaZip](https://peazip.github.io/) (uses its bundled 7z.exe)
+  - [PeaZip](https://peazip.github.io/)
 
-## Installation
+PowerShell 3.0 can run the console workflow, but PowerShell 5.1+ is recommended for the GUI, clipboard support, and toast notifications.
 
-1. Download and extract the latest release ZIP from the [Releases page](https://github.com/erichuang1425/extract-with-passwords-extended/releases/latest) (or clone this repository)
-2. Right-click `Install-ArchivePwExtract.ps1` and select **Run with PowerShell**
-   - Or run from a PowerShell prompt: `powershell -ExecutionPolicy Bypass -File Install-ArchivePwExtract.ps1`
-3. The installer will:
-   - Copy the orchestrator and module files to `%LOCALAPPDATA%\ArchivePwExtract\`
-   - Copy the WPF GUI resources and write the windowless `LaunchGui.vbs` launcher
-   - Create a default `config.json` (if one doesn't exist)
-   - Register Windows Explorer context menu entries (GUI + console) for all supported archive types
-   - Create a Send To shortcut
-   - Create a password list template (if one doesn't exist) and open it in Notepad
-   - On Windows 11: optionally restore the classic right-click menu
-   - Display a registration summary showing which steps succeeded
+## Install
 
-### Project structure
+Download the latest release ZIP from [Releases](https://github.com/erichuang1425/extract-with-passwords-extended/releases/latest), extract it, then run:
 
-```
-Install-ArchivePwExtract.ps1    # Installer (run this)
-TryPwExtract.ps1                # Main orchestrator
-Modules/
-  Config.ps1                    # Configuration defaults and JSON reader
-  Logging.ps1                   # Log writing, process invocation, output condensing
-  ConsoleUI.ps1                 # Console formatting, progress bars, interactive menu
-  ArchiveUtils.ps1              # Archive detection, validation, output management
-  Extraction.ps1                # Engine detection, test/extract, error classification
-  Passwords.ps1                 # Password loading, caching, deduplication
-  NestedExtraction.ps1          # Recursive nested-archive extraction post-pass
-  Parallel.ps1                  # Runspace pool management for concurrency
-  WpfGui.ps1                    # WPF GUI window management
-Resources/
-  MainWindow.xaml               # WPF window layout definition
-CHANGELOG.md                    # Release history (Keep a Changelog format)
+```powershell
+powershell -ExecutionPolicy Bypass -File .\Install-ArchivePwExtract.ps1
 ```
 
-See [CHANGELOG.md](CHANGELOG.md) for the release history.
+You can also double-click `Install.cmd` or right-click `Install-ArchivePwExtract.ps1` and choose **Run with PowerShell**.
+
+The installer copies the tool to `%LOCALAPPDATA%\ArchivePwExtract\`, creates a default config, registers Explorer context-menu actions, creates a Send To shortcut, and opens the password-list template if one does not already exist.
 
 ## Usage
 
-### Right-click an archive file
+### Right-click an archive
 
-Right-click any supported archive and select **Extract with password list**. This opens
-the **GUI** (with no console window) — the WPF window appears with your selection already
-queued. Review the list, then click **Start Extraction**. Each row has a right-click menu
-(open output folder / file location, copy the recovered password or path, remove from
-list), and closing the window asks for confirmation while archives are queued or a run is
-still in progress.
-
-Prefer text mode? Select **Extract in console (password list)** instead for the classic
-console flow.
+Choose **Extract with password list** to open the GUI with the selected archive already queued. Choose **Extract in console (password list)** for the text-mode flow.
 
 ### Right-click a folder
 
-Right-click a folder and select **Extract archives with password list** (GUI) to scan and
-queue all archives inside, or **Extract archives in console (list)** for the console flow.
-The same entries are available on a folder's empty background.
+Choose **Extract archives with password list** to scan the folder and queue supported archives. Folder background entries are also registered, so you can launch the workflow from inside a directory.
 
-> **How launching works.** The GUI entries start through a tiny windowless `LaunchGui.vbs`
-> shim so PowerShell runs fully hidden — no flashing terminal. A console launch that hits
-> an early error no longer vanishes silently; it pauses with the error first. See
-> [docs/launch-and-window-lifecycle.md](docs/launch-and-window-lifecycle.md) for the full
-> design.
+### Edit passwords
 
-### Edit your password list
+The default password file is:
 
-Right-click any folder background and select **Edit archive password list** to open the password file in Notepad. Add one password per line. Lines starting with `#` are ignored.
-
-### Edit configuration
-
-Right-click any folder background and select **Edit archive extractor config** to open `config.json` in Notepad.
-
-### Launch without arguments
-
-Double-click the helper script or run it without arguments to get an interactive menu:
-- Browse for archive(s) to extract
-- Browse for a folder to scan
-- Edit password list
-- Open settings
-- View recent logs
-- Launch GUI mode
-
-### Password file location
-
-The password list is stored at:
-```
+```text
 <Documents>\ArchivePwExtract\passwords.txt
 ```
 
-Additional `.txt` files in the same directory are loaded when `loadAllPasswordFiles` is enabled in config.
+Add one password per line. Lines beginning with `#` are ignored. When `loadAllPasswordFiles` is enabled, additional `.txt` files in the same folder are loaded too.
 
-### Password cache
+### Edit settings
 
-Successful passwords are automatically cached at:
-```
-%LOCALAPPDATA%\ArchivePwExtract\password-cache.txt
-```
+Runtime settings live in:
 
-Cached passwords are tried first on subsequent runs. Cache entries expire after 90 days (configurable).
-
-## Configuration
-
-Settings are stored in `%LOCALAPPDATA%\ArchivePwExtract\config.json` and survive reinstalls. The helper script reads this file at startup and falls back to defaults for any missing keys.
-
-| Setting | Default | Description |
-|---------|---------|-------------|
-| `tryNoPasswordFirst` | `true` | Try extracting without a password before cycling the list |
-| `askBeforeExtracting` | `true` | Prompt for confirmation before starting extraction |
-| `askSeparateFolders` | `true` | Ask whether to use separate output folders per archive |
-| `defaultSeparateFolders` | `true` | Default answer for separate folders prompt |
-| `existingOutputBehavior` | `"replace"` | How to handle existing output: `replace`, `merge`, or `new` |
-| `sevenZipOverwriteMode` | `"aoa"` | 7-Zip overwrite mode (`aoa` = overwrite all) |
-| `winRarOverwriteMode` | `"-o+"` | WinRAR overwrite mode (`-o+` = overwrite all) |
-| `useSevenZip` | `true` | Enable 7-Zip as an extraction engine |
-| `useWinRarFallback` | `true` | Enable WinRAR/UnRAR as a fallback engine |
-| `usePeaZipBundled7zFallback` | `true` | Enable PeaZip's bundled 7z as a fallback engine |
-| `tryExtractEvenIfTestFails` | `true` | Attempt extraction even if integrity test reports failure |
-| `cleanFailedAttemptOutput` | `true` | Delete output from failed extraction attempts |
-| `showPasswordInConsole` | `false` | Show the full matched password in console (masked by default) |
-| `clearClipboardOnExit` | `true` | Clear clipboard when the script finishes |
-| `openOutputAfterSuccess` | `true` | Offer to open the output folder when done |
-| `alwaysShowFinalConfirmation` | `true` | Show summary and wait for Enter before closing |
-| `extractionTimeoutSeconds` | `300` | Per-process timeout in seconds (0 = no timeout) |
-| `logRetentionDays` | `30` | Auto-delete logs older than N days (0 = keep all) |
-| `usePasswordCache` | `true` | Remember successful passwords across sessions |
-| `passwordCacheRetentionDays` | `90` | Auto-delete cache entries older than N days |
-| `loadAllPasswordFiles` | `false` | Load passwords from all .txt files in the password directory |
-| `checkEncryptionBeforeCycling` | `true` | Inspect archive headers before cycling passwords |
-| `testOnlyFirst` | `true` | Use test-only phase to find password, then extract once |
-| `defaultOutputDirectory` | `""` | Default output directory (empty = extract beside archive) |
-| `alwaysAskOutputDirectory` | `false` | Always prompt for output directory before extraction |
-| `showToastNotification` | `true` | Show Windows toast notification on batch completion |
-| `largeArchiveThresholdMB` | `500` | Archives above this size trigger large archive mode |
-| `skipTestExtractFallbackForLargeArchives` | `true` | Skip extract fallback for large archives when test fails |
-| `verboseEngineLogging` | `false` | Log full engine output instead of condensed summaries |
-| `maxParallelArchives` | `1` | Number of archives to process concurrently (1 = sequential) |
-| `maxParallelPasswords` | `1` | Number of passwords to test concurrently per archive |
-| `maxArchivesPerScan` | `0` | Cap on archives detected per folder scan (0 = unbounded). Stops recursive enumeration early on huge directories. |
-| `preferGui` | `false` | Launch WPF GUI instead of console mode (requires PS 5.1+) |
-| `confirmGuiClose` | `true` | Ask for confirmation before closing the GUI window while archives are queued or a run is in progress |
-| `extractNestedArchives` | `false` | After extraction, scan output folders and extract archives found inside them |
-| `maxNestedDepth` | `1` | How many levels of nesting to recurse into (0 disables; clamped to 1–10) |
-| `deleteNestedArchiveAfterExtract` | `false` | Delete a nested archive file after it is successfully extracted (applies to archives found *inside* output, not the original inputs) |
-| `askOutputBehavior` | `true` | Prompt each run to choose how existing extracted folders are handled: overwrite, keep both, or merge & skip duplicates |
-| `postExtractionAction` | `"prompt"` | What to do with the original source archives after a run: `none`, `prompt`, `delete` (successful sets, all volume parts), or `sort` (move into `_Extracted` / `_Failed`) |
-| `postExtractionSilent` | `false` | When `postExtractionAction` is `delete`, skip the confirmation prompt |
-| `preventSleepDuringExtraction` | `true` | Keep the system awake (no idle-sleep) while extraction is running; the display is allowed to sleep |
-| `engineProcessPriority` | `"BelowNormal"` | CPU/I-O priority for each extraction engine process: `Idle`, `BelowNormal`, `Normal`, `AboveNormal`, or `High`. Lower values keep browsers, downloads, and other apps responsive during extraction (`Idle` also yields disk I/O) |
-| `folderNameRules` | `[]` | Regex rules that rewrite the auto-derived output folder name — exclude or rename parts (e.g. `Nomachi-Ankergames.zip` → `Nomachi`). See [Custom output folder names](#custom-output-folder-names) |
-
-## Supported Formats
-
-### Encryption-capable formats (password list is cycled)
-
-| Format | 7-Zip | WinRAR | UnRAR |
-|--------|-------|--------|-------|
-| `.zip` / `.zipx` | Yes | Yes | No |
-| `.7z` | Yes | No | No |
-| `.rar` | Yes | Yes | Yes |
-
-Split variants (`.zip.001`, `.7z.001`, `.rar.001`, `.part01.rar`) are also supported. Multi-volume archives are validated for completeness before extraction.
-
-### Non-encryption formats (extracted directly, no password cycling)
-
-| Format | 7-Zip | WinRAR | UnRAR |
-|--------|-------|--------|-------|
-| `.tar` | Yes | No | No |
-| `.tar.gz` / `.tgz` | Yes | No | No |
-| `.tar.bz2` / `.tbz2` | Yes | No | No |
-| `.tar.xz` / `.txz` | Yes | No | No |
-| `.tar.zst` / `.tzst` | Yes | No | No |
-| `.gz` / `.bz2` / `.xz` / `.zst` | Yes | No | No |
-| `.cab` | Yes | No | No |
-| `.iso` / `.wim` / `.img` / `.dmg` | Yes | No | No |
-
-Compound tar archives (`.tar.zst`, `.tar.gz`, `.tgz`, …) are two-layer: 7-Zip/WinRAR peel the outer compression to an intermediate `.tar`, which the script then extracts **in place** automatically (independent of the nested-extraction setting), so the output folder holds the real contents — not a leftover `.tar`, and with no redundant `name\name` subfolder.
-
-## Engine Priority
-
-Engines are tried in this order for each archive:
-
-1. **7-Zip** — primary engine; supports all formats
-2. **WinRAR** — fallback for `.zip`, `.7z`, `.rar`, and other formats it supports. **UnRAR** is RAR-only and will not be used for non-RAR formats.
-3. **PeaZip bundled 7z** — fallback using PeaZip's included 7z.exe (only if different from standalone 7-Zip)
-
-The script auto-detects installed engines from common installation paths and PATH. Each detected engine is validated with a smoke test before use.
-
-## Performance Optimizations
-
-### Test-only-then-extract
-
-When `testOnlyFirst` is enabled (default), the script tests passwords using lightweight `7z t` or `unrar t` commands without writing any files. Once the correct password is found, a single extraction is performed. This eliminates repeated directory creation and cleanup for each failed password attempt.
-
-### Password caching
-
-Successful passwords are cached in `password-cache.txt`. On subsequent runs, cached passwords are tried first, before the main password list. Cache entries expire after a configurable number of days.
-
-### Session-local reordering
-
-During batch extraction, the most recently successful password is automatically moved to the front of the list for the next archive. This makes batch extraction of archives with the same password nearly instant.
-
-### Header-based encryption detection
-
-For encryption-capable formats (.zip, .rar, .7z), the script inspects the archive header using `7z l -slt` to determine if files are actually encrypted. Unencrypted archives in these formats skip password cycling entirely.
-
-### Large archive mode
-
-Archives above the configured threshold (default 500 MB) skip the extract-even-if-test-fails fallback to avoid expensive failed extraction attempts.
-
-### Parallel processing
-
-Set `maxParallelArchives` > 1 to process multiple archives concurrently using PowerShell runspace pools. Set `maxParallelPasswords` > 1 to test multiple passwords simultaneously against each archive. Both use cancellation tokens to stop work as soon as a match is found. Start with conservative values (2-4) to avoid I/O saturation.
-
-### Background-friendly engine priority
-
-Extraction is CPU- and disk-heavy, and at normal priority it can make a browser feel sluggish or slow downloads writing to the same drive. The `engineProcessPriority` setting lowers the priority of every engine process (7-Zip / WinRAR / UnRAR) so the rest of the system stays responsive. The default is `BelowNormal`; choose `Idle` for the gentlest impact (on Windows, `Idle` also drops the engine to background disk-I/O priority, which is best when something else is downloading to the same path), or `Normal` to disable throttling. The priority is applied to each engine process the moment it starts, and in parallel mode it propagates to every worker.
-
-## Custom output folder names
-
-By default each archive is extracted into a folder named after the archive with its extension stripped (`Game.zip` → `Game`). `folderNameRules` lets you reshape that name with one or more regex search/replace rules — useful for trimming publisher tags, release-group suffixes, or other noise from the folder name.
-
-Each rule is either a plain string (a regex pattern that is simply removed) or an object with `pattern`, optional `replacement` (default empty), and optional `ignoreCase` (default `true`). Rules are applied in order, after the extension is stripped and before the name is sanitized. If a rule reduces the name to nothing, the usual fallback name (`Extracted`) is used.
-
-```jsonc
-{
-    "folderNameRules": [
-        // "Nomachi-Ankergames.zip" -> "Nomachi"
-        { "pattern": "-Ankergames$", "replacement": "" },
-
-        // shorthand: a bare string is a pattern that is removed
-        "-RepackByXYZ$",
-
-        // rename: "Setup_MyGame_v1.2.zip" -> "MyGame"
-        { "pattern": "^Setup_(.+?)_v[\\d.]+$", "replacement": "$1" }
-    ]
-}
-```
-
-An invalid regex in a rule is logged and skipped rather than aborting the run, so a single bad pattern never blocks extraction.
-
-## Known Limitations
-
-- **PeaZip Password Manager**: The script cannot read passwords saved in PeaZip's built-in Password Manager. If PeaZip opens a failed archive using a saved password, copy that password into your password list file.
-- **Password file is plaintext**: The `passwords.txt` file is stored unencrypted in your Documents folder.
-- **Clipboard exposure**: Even with auto-clear, the matched password is briefly in the clipboard between discovery and script exit.
-- **No archive creation**: This tool is extraction-only.
-- **Nested extraction is bounded and single-threaded**: When `extractNestedArchives` is enabled, the nested post-pass runs sequentially (regardless of `maxParallelArchives`), is capped by `maxNestedDepth`, and reuses the parent run's password list and cache. A visited-path guard prevents runaway recursion. Each layer is tried with the previously-successful password first and then the rest, so layers protected by **different** passwords are handled. A layer is scanned for archives only while it has not yet produced an executable payload (`.exe`/`.msi`/`.com`/`.scr`) — an executable is treated as the intended final output, so the pass stops descending at the first layer that yields one (this check applies to the initial output folders as well as every deeper layer).
-- **Toast notifications**: Require PowerShell 5.0+ and Windows 10+. Silently skipped if unavailable.
-
-## Troubleshooting
-
-### Corrupted config
-
-If `config.json` becomes malformed (invalid JSON, out-of-range numeric values, unknown enum strings), the script prints `[!] Falling back to defaults due to invalid config.json` at startup and ignores all stored settings for that run. Out-of-range values for individual keys (e.g. negative timeouts, `maxParallelArchives` outside `[1, 32]`) are clamped to the valid range with a `[!]` warning rather than disabling the whole file.
-
-To reset to defaults, delete the file:
-
-```
+```text
 %LOCALAPPDATA%\ArchivePwExtract\config.json
 ```
 
-Re-run the installer (or just the helper script) to regenerate a fresh `config.json` with default values.
+Use the Explorer entry **Edit archive extractor config** or open the file directly.
 
-### Configuration combinations to avoid
+## Common Configuration
 
-Some combinations are valid JSON but produce undesirable behavior:
+| Setting | Default | Purpose |
+| --- | --- | --- |
+| `tryNoPasswordFirst` | `true` | Try unencrypted extraction before cycling passwords. |
+| `testOnlyFirst` | `true` | Test passwords first, then extract once with the match. |
+| `checkEncryptionBeforeCycling` | `true` | Inspect ZIP/RAR/7z headers before using the password list. |
+| `usePasswordCache` | `true` | Store successful passwords and try them first later. |
+| `maxParallelArchives` | `1` | Number of archives processed at once. |
+| `maxParallelPasswords` | `1` | Number of passwords tested at once per archive. |
+| `extractNestedArchives` | `false` | Recursively extract archives found inside outputs. |
+| `maxNestedDepth` | `1` | Depth limit for nested extraction. |
+| `existingOutputBehavior` | `replace` | Use `replace`, `merge`, or `new` for existing output folders. |
+| `postExtractionAction` | `prompt` | Leave, delete, or sort source archives after extraction. |
+| `engineProcessPriority` | `BelowNormal` | Lower engine process priority to keep Windows responsive. |
+| `folderNameRules` | `[]` | Regex rules for cleaning generated output folder names. |
 
-| Combination | Effect |
-|---|---|
-| `testOnlyFirst = false` + `tryExtractEvenIfTestFails = true` | Wasteful — every password attempt does a full extract; the test/extract fallback never kicks in because there is no test phase. |
-| `checkEncryptionBeforeCycling = false` + `tryNoPasswordFirst = false` | Unencrypted-but-encryption-capable archives (a plain `.zip` with no password) get the full password list cycled against them even though they don't need any password. |
-| `maxParallelPasswords > 1` + `testOnlyFirst = false` | Each worker writes extraction output to the same folder concurrently, racing each other. Parallel password testing is designed for the test-only path. |
-| `maxParallelArchives > 1` + `alwaysAskOutputDirectory = true` | The script will still prompt once at startup, but interactive prompts inside parallel workers are not surfaced and may hang. |
-| `usePasswordCache = false` + `passwordCacheRetentionDays > 0` | Retention setting has no effect; the cache file is never read or written. |
+The full set of defaults is in [Modules/Config.ps1](Modules/Config.ps1).
 
-## Uninstallation
+## Supported Formats
 
-Run the uninstall script:
+Password cycling is used for encryption-capable formats:
 
+| Format | 7-Zip | WinRAR | UnRAR |
+| --- | --- | --- | --- |
+| `.zip`, `.zipx` | Yes | Yes | No |
+| `.7z` | Yes | Limited | No |
+| `.rar` | Yes | Yes | Yes |
+
+Direct extraction is used for formats that do not use the password workflow:
+
+| Format family | Examples |
+| --- | --- |
+| Tar and compressed tar | `.tar`, `.tar.gz`, `.tgz`, `.tar.xz`, `.tar.zst` |
+| Single-stream compression | `.gz`, `.bz2`, `.xz`, `.zst` |
+| Disk/package images | `.iso`, `.wim`, `.img`, `.dmg`, `.cab` |
+
+Compound tar archives are handled as two-step extractions, so files such as `.tar.zst` and `.tgz` are expanded to their final contents rather than leaving an intermediate `.tar` behind.
+
+## Project Structure
+
+```text
+.
+|-- Install-ArchivePwExtract.ps1   # Installer and uninstaller generator
+|-- Install.cmd                    # Double-click installer launcher
+|-- TryPwExtract.ps1               # Main orchestration script
+|-- Modules/
+|   |-- ArchiveUtils.ps1           # Archive detection and output paths
+|   |-- Config.ps1                 # Defaults and config loading
+|   |-- ConsoleUI.ps1              # Console prompts and summaries
+|   |-- Extraction.ps1             # Engine detection and extraction calls
+|   |-- Logging.ps1                # Logs, redaction, process execution
+|   |-- NestedExtraction.ps1       # Recursive nested extraction pass
+|   |-- Parallel.ps1               # Runspace-based concurrency
+|   |-- Passwords.ps1              # Password loading and cache
+|   |-- PowerManagement.ps1        # Keep-awake support
+|   `-- WpfGui.ps1                 # GUI event flow
+|-- Resources/MainWindow.xaml      # WPF layout
+|-- Tests/                         # Pester suites
+|-- docs/                          # Design notes and README assets
+`-- .github/workflows/             # CI and release automation
 ```
-%LOCALAPPDATA%\ArchivePwExtract\Uninstall-ArchivePwExtract.ps1
-```
 
-Right-click and select **Run with PowerShell**. This removes all context menu entries, the Send To shortcut, and optionally reverses the Windows 11 classic menu restoration. Your password file, config file, and log folder are preserved.
+## Development
 
-## Log Files
-
-Diagnostic logs are saved to:
-
-```
-%LOCALAPPDATA%\ArchivePwExtract\Logs\
-```
-
-Each run creates a timestamped log file. By default, repetitive engine errors (like "Wrong password" repeated per file) are condensed into a single summary line. Set `verboseEngineLogging` to `true` in config.json to restore full engine output. Passwords are always redacted in logs.
-
-## Development / Testing
-
-The pure-logic modules (config validation, password loading/caching, archive-name
-detection, command-line quoting, and console formatting) are covered by a
-[Pester](https://pester.dev) test suite under `Tests/`, and all scripts are linted
-with [PSScriptAnalyzer](https://github.com/PowerShell/PSScriptAnalyzer). Both run
-automatically in CI (`.github/workflows/ci.yml`) on every push and pull request.
-
-To run them locally on Windows (PowerShell 5.1 or PowerShell 7+):
+Install the test tools once:
 
 ```powershell
-# One-time: install the tooling
 Install-Module Pester -MinimumVersion 5.5.0 -Force -SkipPublisherCheck
 Install-Module PSScriptAnalyzer -Force
-
-# Run the tests (writes testResults.xml + coverage.xml)
-./Tests/PesterConfiguration.ps1
-
-# Run the linter
-Invoke-ScriptAnalyzer -Path . -Recurse -Settings ./PSScriptAnalyzerSettings.psd1
 ```
 
-Tests exercise individual functions by dot-sourcing only the Windows-independent
-modules; the GUI (`WpfGui.ps1`), parallel runspaces (`Parallel.ps1`), and engine
-invocation (`Extraction.ps1`) are out of scope for this suite.
+Run tests and lint locally:
+
+```powershell
+.\Tests\PesterConfiguration.ps1
+Invoke-ScriptAnalyzer -Path . -Recurse -Settings .\PSScriptAnalyzerSettings.psd1
+```
+
+The test suite focuses on deterministic PowerShell logic: config validation, password loading, cache behavior, archive detection, console formatting, nested extraction decisions, logging helpers, and power-management calls. Full GUI and engine integration still require manual Windows testing with installed archive engines.
+
+## Release
+
+Releases are versioned with semantic tags such as `v4.1.1`. Pushing a `v*` tag runs the release workflow, packages the scripts/modules/resources into a ZIP, and creates a draft GitHub release.
+
+The application version is stored in two places that should stay in sync:
+
+- `Modules/Config.ps1`
+- `Install-ArchivePwExtract.ps1`
+
+## Roadmap
+
+- Add filename-derived password hints.
+- Expand manual integration test notes for common 7-Zip and WinRAR installs.
+- Add optional screenshot/GIF capture to the release process.
+- Continue tightening GUI edge cases around long-running nested jobs.
+
+## Security Notes
+
+The password list and password cache are plaintext files on the local machine. This tool is intended for personal archive recovery/extraction workflows where that tradeoff is acceptable. Logs redact passwords, and console output masks matched passwords by default, but anyone with access to the password files can read them.
 
 ## License
 

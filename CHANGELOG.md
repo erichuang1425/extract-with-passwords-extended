@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.1.1] - 2026-06-29
+
 ### Fixed
 - **Batch extraction no longer wedges partway through a large queue.** Every
   password test, extraction, and encryption probe launched an engine process
@@ -179,7 +181,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## Planned
 - Password hints derived from archive filename patterns.
 
-[Unreleased]: https://github.com/erichuang1425/extract-with-passwords-extended/compare/v4.1.0...HEAD
+[Unreleased]: https://github.com/erichuang1425/extract-with-passwords-extended/compare/v4.1.1...HEAD
+[4.1.1]: https://github.com/erichuang1425/extract-with-passwords-extended/releases/tag/v4.1.1
 [4.1.0]: https://github.com/erichuang1425/extract-with-passwords-extended/releases/tag/v4.1.0
 [4.0.0]: https://github.com/erichuang1425/extract-with-passwords-extended/releases/tag/v4.0.0
 [3.0.0]: https://github.com/erichuang1425/extract-with-passwords-extended/releases/tag/v3.0.0
