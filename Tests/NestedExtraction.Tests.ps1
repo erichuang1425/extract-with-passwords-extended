@@ -9,6 +9,7 @@ BeforeAll {
     function Find-NestedArchives { param($Root) }
     function Test-DirectoryHasExecutable { param($Dir, [switch]$IgnoreRedist) }
     function Get-CanonicalArchiveName { param($Name) }
+    function Restore-MangledArchiveName { param($Current, $Original) return $Current }
     function Get-EnginePlanForArchive { param($Archive, $SevenZip, $PeaZip7z, $WinRar) }
     function Get-ArchiveBaseName { param($Path) }
     function Resolve-OutputDir { param($BaseDir, $IsSharedOutput, $BehaviorOverride) }
@@ -100,5 +101,49 @@ Describe 'Invoke-NestedExtractionPass cancellation' {
         $results.Count | Should -Be 1
         $results[0].Status | Should -Be 'Skipped'
         $results[0].Reason | Should -Be 'Cancelled'
+    }
+}
+
+Describe 'Invoke-NestedExtractionPass reverts unverified mangled renames' {
+    BeforeEach {
+        $script:restoreArgs = $null
+
+        Mock Find-NestedArchives { return @('C:\seed\asset_zip') }
+        Mock Test-DirectoryHasExecutable { return $false }
+        # Simulate the mangled-name heuristic matching a non-archive payload file
+        # (e.g. "asset_zip") that happens to look like a mangled archive name.
+        Mock Get-CanonicalArchiveName { return 'asset.zip' }
+        Mock Test-Path { return $false }
+        Mock Rename-Item { }
+        Mock Get-EnginePlanForArchive { return @(@{ Name = '7-Zip'; Path = 'C:/7z.exe' }) }
+        Mock Get-ArchiveBaseName { return 'asset' }
+        Mock Resolve-OutputDir { return 'C:\seed\asset' }
+        Mock Test-IsEncryptionCapable { return $false }
+        Mock Remove-EmptyOutputDir { }
+        Mock Get-LastEngineFailureType { return 'ExtractionFailed' }
+        # The engine can never actually extract it (it isn't really an archive).
+        Mock Try-EnginePassword { return $false }
+        Mock Restore-MangledArchiveName {
+            param($Current, $Original)
+            $script:restoreArgs = @{ Current = $Current; Original = $Original }
+            return $Original
+        }
+    }
+
+    It 'reverts the rename and reports the original path when the renamed candidate cannot be extracted' {
+        $results = @(Invoke-NestedExtractionPass `
+            -SeedFolders @('C:\seed') `
+            -Passwords @('') `
+            -SevenZip 'C:/7z.exe' `
+            -PeaZip7z $null `
+            -WinRar $null `
+            -MaxDepth 1)
+
+        $results.Count | Should -Be 1
+        $results[0].Status | Should -Be 'Failed'
+        $results[0].Archive | Should -Be 'C:\seed\asset_zip'
+
+        $script:restoreArgs.Current | Should -Be 'C:\seed\asset.zip'
+        $script:restoreArgs.Original | Should -Be 'C:\seed\asset_zip'
     }
 }

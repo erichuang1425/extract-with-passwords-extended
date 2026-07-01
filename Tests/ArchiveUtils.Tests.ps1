@@ -493,6 +493,38 @@ Describe 'Get-CanonicalArchiveName / Test-IsMangledArchiveName' {
     }
 }
 
+Describe 'Restore-MangledArchiveName' {
+    It 'renames the file back to its original name and returns the original path' {
+        $d = Join-Path $TestDrive 'restore-rename'
+        New-Item -ItemType Directory -Force -Path $d | Out-Null
+        $original = Join-Path $d 'asset_zip'
+        $renamed = Join-Path $d 'asset.zip'
+        New-Item -ItemType File -Force -Path $renamed | Out-Null
+
+        $result = Restore-MangledArchiveName -Current $renamed -Original $original
+
+        $result | Should -Be $original
+        Test-Path -LiteralPath $original | Should -BeTrue
+        Test-Path -LiteralPath $renamed | Should -BeFalse
+    }
+
+    It 'is a no-op when no rename occurred (Original is null/empty)' {
+        $d = Join-Path $TestDrive 'restore-noop'
+        New-Item -ItemType Directory -Force -Path $d | Out-Null
+        $current = Join-Path $d 'plain.7z'
+        New-Item -ItemType File -Force -Path $current | Out-Null
+
+        Restore-MangledArchiveName -Current $current -Original $null | Should -Be $current
+        Restore-MangledArchiveName -Current $current -Original '' | Should -Be $current
+        Test-Path -LiteralPath $current | Should -BeTrue
+    }
+
+    It 'returns Current unchanged when the renamed file no longer exists' {
+        $missing = Join-Path $TestDrive 'restore-missing\gone.zip'
+        Restore-MangledArchiveName -Current $missing -Original (Join-Path $TestDrive 'restore-missing\gone_zip') | Should -Be $missing
+    }
+}
+
 Describe 'Test-IsRedistExecutable' {
     It 'flags known redistributable/prerequisite installers' -ForEach @(
         @{ Path = 'C:\out\vcredist_x64.exe' }
@@ -507,6 +539,23 @@ Describe 'Test-IsRedistExecutable' {
 
     It 'does not flag a real payload executable' -ForEach @(
         @{ Path = 'C:\out\Game.exe' }, @{ Path = 'C:\out\Setup.exe' }, @{ Path = 'C:\out\launcher.exe' }
+    ) {
+        Test-IsRedistExecutable -Path $Path | Should -BeFalse
+    }
+
+    It 'matches redist by whole directory segment, not a path substring' -ForEach @(
+        @{ Path = 'C:\out\_CommonRedist\vcredist_x64.exe' }
+        @{ Path = 'C:\out\Redist\install.exe' }
+        @{ Path = 'C:\out\Prerequisites\install.exe' }
+        @{ Path = 'C:\out\DirectX\DXSETUP.exe' }
+    ) {
+        Test-IsRedistExecutable -Path $Path | Should -BeTrue
+    }
+
+    It 'does not false-positive when a title merely contains a redist-like word' -ForEach @(
+        @{ Path = 'C:\out\DirectX Adventure\Game.exe' }
+        @{ Path = 'C:\out\Redistribution Rebellion\Game.exe' }
+        @{ Path = 'C:\out\Prerequisites of Evil\Game.exe' }
     ) {
         Test-IsRedistExecutable -Path $Path | Should -BeFalse
     }

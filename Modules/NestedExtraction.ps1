@@ -89,6 +89,10 @@ function Invoke-NestedExtractionPass {
             # Repair a mangled archive extension in place (foo_tar_zst -> foo.tar.zst,
             # foo_7z -> foo.7z, foo.tar.zst.zst -> foo.tar.zst) so the engine plan,
             # base-name derivation, and compound-tar residue logic all recognize it.
+            # The name match is a heuristic (a payload could hold a non-archive named
+            # like "asset_zip"), so $renamedFrom records the original name and the
+            # rename is reverted below if the file does not actually extract.
+            $renamedFrom = $null
             $canonName = Get-CanonicalArchiveName ([IO.Path]::GetFileName($archive))
             if ($canonName) {
                 $canonPath = Join-Path (Split-Path $archive -Parent) $canonName
@@ -99,6 +103,7 @@ function Invoke-NestedExtractionPass {
                         try {
                             Rename-Item -LiteralPath $archive -NewName $canonName -ErrorAction Stop
                             Write-Log "Renamed mangled nested archive '$([IO.Path]::GetFileName($archive))' -> '$canonName'"
+                            $renamedFrom = $archive
                             $archive = $canonPath
                             $archiveKey = Get-NormalizedPathKey $archive
                             if ($archiveKey) { $visitedArchives[$archiveKey] = $true }
@@ -120,6 +125,7 @@ function Invoke-NestedExtractionPass {
             if (@($enginePlan).Count -eq 0) {
                 $sw.Stop()
                 Write-Status "No compatible engine for nested archive." "fail"
+                $archive = Restore-MangledArchiveName -Current $archive -Original $renamedFrom
                 $results.Add([PSCustomObject]@{
                     Archive = $archive; Status = "Failed"; OutputDir = $null
                     Engine = $null; Password = $null; ElapsedMs = $sw.ElapsedMilliseconds
@@ -189,6 +195,7 @@ function Invoke-NestedExtractionPass {
                 # real extraction failure.
                 Write-Status "Nested skipped (cancelled): $archiveName" "dim"
                 Write-Log "Nested extraction cancelled for $archive" "WARN"
+                $archive = Restore-MangledArchiveName -Current $archive -Original $renamedFrom
                 Remove-EmptyOutputDir -OutputDir $outputDir -SeparateFolders $true
                 $results.Add([PSCustomObject]@{
                     Archive = $archive; Status = "Skipped"; OutputDir = $null
@@ -241,6 +248,11 @@ function Invoke-NestedExtractionPass {
                 Write-Status "Nested FAILED: no matching password for $archiveName" "fail"
                 Write-Log "Nested failure: $archive" "ERROR"
                 Remove-EmptyOutputDir -OutputDir $outputDir -SeparateFolders $true
+                # The rename was only a heuristic guess (Get-CanonicalArchiveName
+                # matches on file name, not content); since no engine could actually
+                # extract it, revert so a non-archive payload file (e.g. "asset_zip")
+                # is not left permanently renamed.
+                $archive = Restore-MangledArchiveName -Current $archive -Original $renamedFrom
                 $nestedReason = Get-LastEngineFailureType -ArchiveKnownEncrypted $isEncryptable
                 if ([string]::IsNullOrEmpty($nestedReason) -or $nestedReason -in @("Success", "Unknown", "WrongPassword")) {
                     $nestedReason = if ($isEncryptable) { "WrongPassword" } else { "ExtractionFailed" }

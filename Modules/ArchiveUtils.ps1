@@ -346,6 +346,36 @@ function Test-IsMangledArchiveName {
     return ($null -ne (Get-CanonicalArchiveName ([IO.Path]::GetFileName($Path))))
 }
 
+function Restore-MangledArchiveName {
+    # Undo a speculative rename applied by the mangled-archive-name heuristic
+    # (Get-CanonicalArchiveName) once it turns out the candidate was not actually
+    # extractable — e.g. a non-archive payload file that merely happened to be
+    # named "asset_zip" or "readme_7z". $Original is the pre-rename path captured
+    # by the caller, or $null/empty when no rename was performed. Returns the path
+    # callers should use going forward: $Original (restored) on success, or
+    # $Current unchanged when there was nothing to revert or the revert failed.
+    param(
+        [string]$Current,
+        [string]$Original
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Original) -or $Original -eq $Current) {
+        return $Current
+    }
+    if (-not (Test-Path -LiteralPath $Current)) {
+        return $Current
+    }
+
+    try {
+        Rename-Item -LiteralPath $Current -NewName ([IO.Path]::GetFileName($Original)) -ErrorAction Stop
+        Write-Log "Reverted unverified mangled-name rename: '$([IO.Path]::GetFileName($Current))' -> '$([IO.Path]::GetFileName($Original))'"
+        return $Original
+    } catch {
+        Write-Log "Could not revert rename of $Current back to $Original : $($_.Exception.Message)" "WARN"
+        return $Current
+    }
+}
+
 function Test-IsRedistExecutable {
     # True when an executable is a redistributable/prerequisite installer rather
     # than the real payload — judged by file name (vcredist, dxsetup, dotnet, …)
@@ -366,9 +396,21 @@ function Test-IsRedistExecutable {
         }
     }
 
+    # Also treat anything under a dedicated redist/prerequisites folder as redist,
+    # but match whole directory *segments* only — a title like "DirectX Adventure"
+    # or "Redistribution" must not flag its real payload as a prerequisite.
     $dir = [string](Split-Path $Path -Parent)
-    if ($dir -imatch 'redist|prerequisite|prereq|commonredist|directx') {
-        return $true
+    if ($dir) {
+        foreach ($seg in ($dir -split '[\\/]+')) {
+            if ([string]::IsNullOrWhiteSpace($seg)) { continue }
+            if ($seg -imatch '^_?(common)?redist$' -or
+                $seg -imatch '^_?redistributables?$' -or
+                $seg -imatch '^prerequisites?$' -or
+                $seg -imatch '^prereq$' -or
+                $seg -imatch '^directx$') {
+                return $true
+            }
+        }
     }
 
     return $false
