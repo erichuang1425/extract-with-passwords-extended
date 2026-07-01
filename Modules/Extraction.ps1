@@ -6,6 +6,11 @@
 # clobber each other.
 $script:LastEngineResult = $null
 
+# Set by Try-EnginePassword: $true when the most recent *successful* extraction
+# left the output folder with no files. Callers read it after a success to warn
+# the user that an archive extracted to nothing. Per-runspace, like the above.
+$script:LastExtractionEmpty = $false
+
 function Get-NormalSevenZipPath {
     $found = Find-FirstExistingPath @(
         "$env:ProgramFiles\7-Zip\7z.exe",
@@ -398,6 +403,7 @@ function Try-EnginePassword {
 
     Write-Log "Trying engine $EngineName on archive $Archive"
 
+    $script:LastExtractionEmpty = $false
     $testOk = $false
     $extractOk = $false
 
@@ -460,6 +466,13 @@ function Try-EnginePassword {
                 return $false
             }
         } else {
+            # Flag a "successful" extraction that produced no files so callers can
+            # warn the user (an empty payload usually means a wrong/partial source
+            # or a same-name overwrite that cleared the folder).
+            if (-not (Test-DirectoryHasFiles $OutputDir)) {
+                $script:LastExtractionEmpty = $true
+                Write-Log "Extraction reported success but the output folder is empty: $Archive" "WARN"
+            }
             return $true
         }
     }

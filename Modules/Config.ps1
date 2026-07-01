@@ -3,7 +3,7 @@
 # Single source of truth for the application version. All banners and log lines
 # read from this; keep the installer's own $AppVersion (it does not dot-source
 # this module at runtime) in lockstep when bumping.
-$AppVersion = "4.1.1"
+$AppVersion = "4.2.0"
 
 $TryNoPasswordFirst = $true
 $AskBeforeExtracting = $true
@@ -50,8 +50,13 @@ $PreferGui = $false
 # so a stray click on the close button never silently discards the run/results.
 $ConfirmGuiClose = $true
 
-$ExtractNestedArchives = $false
-$MaxNestedDepth = 1
+# Recursively extract archives found inside an already-extracted output folder.
+# On by default so an archive whose real payload is a *nested* archive (a common
+# packaging habit) is unpacked all the way down without manual follow-up. The
+# descent stops at the layer that yields a real executable payload (see
+# $ExecutablePayloadExtensions / $RedistFileNamePatterns) or at $MaxNestedDepth.
+$ExtractNestedArchives = $true
+$MaxNestedDepth = 5
 $DeleteNestedArchiveAfterExtract = $false
 
 # Priority class given to each extraction engine process (7z / WinRAR / UnRAR).
@@ -91,6 +96,33 @@ $EncryptionCapableExtensions = @{
 # layer, it stops descending further: the executable is taken to be the intended
 # final output, so there is no need to keep peeling layers underneath it.
 $ExecutablePayloadExtensions = @('.exe', '.msi', '.com', '.scr')
+
+# Redistributable/prerequisite installers that are NOT the real payload. The
+# nested pass ignores these when deciding whether a layer has reached its final
+# executable: a folder whose only .exe is a VC++ runtime, DirectX, or .NET
+# prerequisite (sitting next to a still-packed game archive) keeps descending
+# instead of stopping on the redist. Matched case-insensitively against the file
+# name; a file whose parent path contains a redist/prerequisites folder is also
+# treated as redist. Patterns are plain regex fragments.
+$RedistFileNamePatterns = @(
+    'vc_?redist', 'vcredist', 'msvc', 'dxsetup', 'dxwebsetup',
+    # A bare "directx" substring would also match a real payload that happens to
+    # be titled e.g. "DirectX Adventure.exe"; dxsetup/dxwebsetup already cover the
+    # common installer file names, so this only matches DirectX installers that
+    # spell out redist/setup/web/install elsewhere in the name.
+    'directx.*(?:redist|setup|web|install)',
+    'dotnet', 'ndp\d', 'netfx', 'oalinst', 'openal',
+    'ue\d?prereqsetup', 'prereq', 'prerequisite', 'physx', 'xnafx',
+    'commonredist', 'redist'
+)
+
+# Strip leading/trailing bracket "tag" groups from the auto-derived output folder
+# name — e.g. 【PC+KR汉化ADV】男娘便女 -> 男娘便女, and
+# [241128][硝石工房] IVAV!! 2nd Girl Ver25.01.13 [RJ01290563] -> IVAV!! 2nd Girl
+# Ver25.01.13. Only fullwidth 【】 and square [] groups at the very start/end are
+# removed; parentheses ()/（） and brackets in the middle of a title are left
+# alone. Applies before $FolderNameRules so a user rule can still refine further.
+$StripBracketTagsFromFolderName = $true
 
 $lastCopiedPassword = $null
 $lastSuccessfulPassword = $null
@@ -224,6 +256,8 @@ function Read-Config {
             "preventSleepDuringExtraction" = "PreventSleepDuringExtraction"
             "engineProcessPriority" = "EngineProcessPriority"
             "folderNameRules" = "FolderNameRules"
+            "stripBracketTagsFromFolderName" = "StripBracketTagsFromFolderName"
+            "redistFileNamePatterns" = "RedistFileNamePatterns"
         }
 
         foreach ($jsonKey in $map.Keys) {

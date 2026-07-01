@@ -322,6 +322,7 @@ function Invoke-ParallelArchiveExtraction {
         SkipTestExtractFallbackForLargeArchives = $SkipTestExtractFallbackForLargeArchives
         EngineProcessPriority = $EngineProcessPriority
         FolderNameRules = $FolderNameRules
+        StripBracketTagsFromFolderName = $StripBracketTagsFromFolderName
     }
 
     try {

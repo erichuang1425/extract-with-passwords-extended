@@ -61,13 +61,16 @@ function Invoke-NestedExtractionPass {
         $nested = @(Find-NestedArchives -Root $folder)
         if ($nested.Count -eq 0) { continue }
 
-        # Stop at the payload layer: if this layer already contains an executable
-        # payload (.exe/.msi/...), treat it as the intended final output and do not
-        # extract any archive sitting alongside it. Applied here — before scanning
-        # a dequeued folder — it gates the seed (main output) folders *and* every
-        # deeper layer alike, so the first layer that yields an executable ends the
-        # descent.
-        if (Test-DirectoryHasExecutable -Dir $folder) {
+        # Stop at the payload layer: if this layer already contains a *real*
+        # executable payload (.exe/.msi/...), treat it as the intended final output
+        # and do not extract any archive sitting alongside it. Redistributable and
+        # prerequisite installers (vcredist, dxsetup, .NET, …) are ignored via
+        # -IgnoreRedist, so a layer whose only .exe is a runtime installer next to a
+        # still-packed archive keeps descending. Applied here — before scanning a
+        # dequeued folder — it gates the seed (main output) folders *and* every
+        # deeper layer alike, so the first layer that yields a real executable ends
+        # the descent.
+        if (Test-DirectoryHasExecutable -Dir $folder -IgnoreRedist) {
             Write-Status "Reached an executable payload; skipping nested archives in this layer." "dim"
             Write-Log "Nested scan skipped for $folder (executable payload present)."
             continue
@@ -83,6 +86,34 @@ function Invoke-NestedExtractionPass {
             if ($archiveKey -and $visitedArchives.ContainsKey($archiveKey)) { continue }
             if ($archiveKey) { $visitedArchives[$archiveKey] = $true }
 
+            # Repair a mangled archive extension in place (foo_tar_zst -> foo.tar.zst,
+            # foo_7z -> foo.7z, foo.tar.zst.zst -> foo.tar.zst) so the engine plan,
+            # base-name derivation, and compound-tar residue logic all recognize it.
+            # The name match is a heuristic (a payload could hold a non-archive named
+            # like "asset_zip"), so $renamedFrom records the original name and the
+            # rename is reverted below if the file does not actually extract.
+            $renamedFrom = $null
+            $canonName = Get-CanonicalArchiveName ([IO.Path]::GetFileName($archive))
+            if ($canonName) {
+                $canonPath = Join-Path (Split-Path $archive -Parent) $canonName
+                if ($canonPath -ne $archive) {
+                    if (Test-Path -LiteralPath $canonPath) {
+                        Write-Log "Canonical name '$canonName' already exists; extracting mangled archive in place: $archive" "WARN"
+                    } else {
+                        try {
+                            Rename-Item -LiteralPath $archive -NewName $canonName -ErrorAction Stop
+                            Write-Log "Renamed mangled nested archive '$([IO.Path]::GetFileName($archive))' -> '$canonName'"
+                            $renamedFrom = $archive
+                            $archive = $canonPath
+                            $archiveKey = Get-NormalizedPathKey $archive
+                            if ($archiveKey) { $visitedArchives[$archiveKey] = $true }
+                        } catch {
+                            Write-Log "Could not rename mangled nested archive $archive : $($_.Exception.Message)" "WARN"
+                        }
+                    }
+                }
+            }
+
             $sw = [System.Diagnostics.Stopwatch]::StartNew()
             $archiveName = [IO.Path]::GetFileName($archive)
             Write-Status "Nested [depth $depth]: $archiveName" "info"
@@ -94,6 +125,7 @@ function Invoke-NestedExtractionPass {
             if (@($enginePlan).Count -eq 0) {
                 $sw.Stop()
                 Write-Status "No compatible engine for nested archive." "fail"
+                $archive = Restore-MangledArchiveName -Current $archive -Original $renamedFrom
                 $results.Add([PSCustomObject]@{
                     Archive = $archive; Status = "Failed"; OutputDir = $null
                     Engine = $null; Password = $null; ElapsedMs = $sw.ElapsedMilliseconds
@@ -163,6 +195,7 @@ function Invoke-NestedExtractionPass {
                 # real extraction failure.
                 Write-Status "Nested skipped (cancelled): $archiveName" "dim"
                 Write-Log "Nested extraction cancelled for $archive" "WARN"
+                $archive = Restore-MangledArchiveName -Current $archive -Original $renamedFrom
                 Remove-EmptyOutputDir -OutputDir $outputDir -SeparateFolders $true
                 $results.Add([PSCustomObject]@{
                     Archive = $archive; Status = "Skipped"; OutputDir = $null
@@ -176,6 +209,11 @@ function Invoke-NestedExtractionPass {
                 $status = if ($winPw -eq "") { "NoPassword" } else { "Succeeded" }
                 Write-Status "Nested extracted via $winEngine -> $outputDir" "dim"
                 Write-Log "Nested success: $archive (engine $winEngine)"
+
+                if ($script:LastExtractionEmpty) {
+                    Write-Status "Nested archive extracted but produced no files (output is empty): $archiveName" "warn"
+                    Write-Log "Nested extraction produced no files: $archive" "WARN"
+                }
 
                 if ($winPw) {
                     $lastWin = $winPw
@@ -210,6 +248,11 @@ function Invoke-NestedExtractionPass {
                 Write-Status "Nested FAILED: no matching password for $archiveName" "fail"
                 Write-Log "Nested failure: $archive" "ERROR"
                 Remove-EmptyOutputDir -OutputDir $outputDir -SeparateFolders $true
+                # The rename was only a heuristic guess (Get-CanonicalArchiveName
+                # matches on file name, not content); since no engine could actually
+                # extract it, revert so a non-archive payload file (e.g. "asset_zip")
+                # is not left permanently renamed.
+                $archive = Restore-MangledArchiveName -Current $archive -Original $renamedFrom
                 $nestedReason = Get-LastEngineFailureType -ArchiveKnownEncrypted $isEncryptable
                 if ([string]::IsNullOrEmpty($nestedReason) -or $nestedReason -in @("Success", "Unknown", "WrongPassword")) {
                     $nestedReason = if ($isEncryptable) { "WrongPassword" } else { "ExtractionFailed" }
