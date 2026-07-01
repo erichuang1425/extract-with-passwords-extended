@@ -22,7 +22,7 @@ $ErrorActionPreference = "Stop"
 
 # Keep in lockstep with $AppVersion in Modules/Config.ps1. The installer does not
 # dot-source Config.ps1 at runtime, so it carries its own copy of the version.
-$AppVersion = "4.1.1"
+$AppVersion = "4.2.0"
 
 if ($PSVersionTable.PSVersion.Major -lt 3) {
     Write-Host "PowerShell 3.0 or later is required. Current: $($PSVersionTable.PSVersion)" -ForegroundColor Red
@@ -104,14 +104,15 @@ if (!(Test-Path -LiteralPath $ConfigPath)) {
     "maxArchivesPerScan": 0,
     "preferGui": false,
     "confirmGuiClose": true,
-    "extractNestedArchives": false,
-    "maxNestedDepth": 1,
+    "extractNestedArchives": true,
+    "maxNestedDepth": 5,
     "deleteNestedArchiveAfterExtract": false,
     "askOutputBehavior": true,
     "postExtractionAction": "prompt",
     "postExtractionSilent": false,
     "preventSleepDuringExtraction": true,
     "engineProcessPriority": "BelowNormal",
+    "stripBracketTagsFromFolderName": true,
     "folderNameRules": []
 }
 "@ | Set-Content -LiteralPath $ConfigPath -Encoding UTF8
@@ -560,13 +561,15 @@ Write-Host "    Config:     " -NoNewline; Write-Host $ConfigPath -ForegroundColo
 Write-Host "    Logs:       " -NoNewline; Write-Host $LogDir -ForegroundColor White
 Write-Host ""
 Write-Host "  New in v$($AppVersion):" -ForegroundColor Cyan
-Write-Host "    - Right-click 'Extract with password list' now opens the GUI directly"
+Write-Host "    - GUI extraction fixed (dedicated runspace; no more 'no Runspace' error)"
+Write-Host "    - Nested-archive extraction is ON by default (up to 5 layers deep),"
+Write-Host "      and ignores redist/prerequisite installers when finding the payload"
+Write-Host "    - Folder names auto-cleaned of leading/trailing bracket tags (e.g. [RJ...])"
+Write-Host "    - Mangled archive names (foo_tar_zst, foo.tar.zst.zst) are repaired + extracted"
+Write-Host "    - Warns when an extraction succeeds but produces an empty folder"
+Write-Host "    - Right-click 'Extract with password list' opens the GUI directly"
 Write-Host "      (no console window), with your selection already queued"
-Write-Host "    - 'Extract in console (password list)' is the secondary, text-mode entry"
-Write-Host "    - GUI closes with a confirmation prompt; failed launches no longer vanish"
-Write-Host "    - Recursive nested-archive extraction (set extractNestedArchives: true)"
 Write-Host "    - Parallel archive and password processing"
-Write-Host "    - Condensed logging (no more per-file wrong-password spam)"
 Write-Host "    - Error classification (wrong password vs corrupt vs timeout)"
 Write-Host ""
 Write-Host "  Notes:" -ForegroundColor Cyan

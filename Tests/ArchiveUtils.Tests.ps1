@@ -1,4 +1,4 @@
-# ArchiveUtils.Tests.ps1 — unit tests for archive name/format helpers in Modules/ArchiveUtils.ps1
+# ArchiveUtils.Tests.ps1 - unit tests for archive name/format helpers in Modules/ArchiveUtils.ps1
 #
 # NOTE: Sanitize-FileName depends on [IO.Path]::GetInvalidFileNameChars(),
 # which differs between Windows and Linux. These tests assume the Windows
@@ -49,7 +49,11 @@ Describe 'Get-ArchiveBaseName' {
     }
 
     It 'handles a multi-byte (Japanese) base name' {
-        Get-ArchiveBaseName '日本語_part1.rar' | Should -Be '日本語'
+        # Built from code points so the file stays pure-ASCII and parses under any
+        # Windows codepage (a no-BOM UTF-8 script is otherwise mis-decoded by
+        # Windows PowerShell on a DBCS system locale).
+        $jp = [string]([char]0x65E5 + [char]0x672C + [char]0x8A9E)
+        Get-ArchiveBaseName ($jp + '_part1.rar') | Should -Be $jp
     }
 }
 
@@ -400,5 +404,151 @@ Describe 'Sanitize-FileName' {
 
     It 'clamps very long names to 240 characters' {
         (Sanitize-FileName ('x' * 300)).Length | Should -Be 240
+    }
+}
+
+Describe 'Remove-BracketTagFromName' {
+    BeforeAll {
+        # Build full-width bracket / CJK inputs from code points so the assertions
+        # hold regardless of how this file is decoded (Windows PowerShell reads a
+        # no-BOM script as ANSI). U+3010/U+3011 = the full-width brackets;
+        # $title = a 4-char CJK title.
+        $ob = [char]0x3010
+        $cb = [char]0x3011
+        $title = [string]([char]0x7537 + [char]0x5A18 + [char]0x4FBF + [char]0x5973)
+    }
+
+    It 'strips a leading full-width bracket tag' {
+        Remove-BracketTagFromName ($ob + 'PC+KR' + $cb + $title) | Should -Be $title
+    }
+
+    It 'strips leading and trailing square-bracket tag groups' {
+        Remove-BracketTagFromName '[241128][circle] IVAV!! 2nd Girl Ver25.01.13 [RJ01290563]' |
+            Should -Be 'IVAV!! 2nd Girl Ver25.01.13'
+    }
+
+    It 'leaves a title with no edge brackets unchanged' {
+        Remove-BracketTagFromName 'Just A Title' | Should -Be 'Just A Title'
+    }
+
+    It 'preserves brackets in the middle of a title' {
+        Remove-BracketTagFromName 'My [Special] Game' | Should -Be 'My [Special] Game'
+    }
+
+    It 'never strips the whole name when it is only a tag' {
+        Remove-BracketTagFromName ($ob + 'only' + $cb) | Should -Be ($ob + 'only' + $cb)
+    }
+}
+
+Describe 'Get-ArchiveBaseName bracket cleanup' {
+    BeforeAll {
+        $ob = [char]0x3010
+        $cb = [char]0x3011
+        $title = [string]([char]0x7537 + [char]0x5A18 + [char]0x4FBF + [char]0x5973)
+        # A CJK name ending in full-width parentheses, which must survive intact.
+        $parenName = [string]([char]0x5973 + [char]0x88C5 + [char]0x5B66 + [char]0x5712 + [char]0xFF08 + [char]0x598A + [char]0xFF09)
+    }
+
+    BeforeEach { $FolderNameRules = @() }
+
+    It 'cleans a leading full-width bracket tag from the derived folder name' {
+        Get-ArchiveBaseName ('C:\dl\' + $ob + 'PC+KR' + $cb + $title + '.rar') | Should -Be $title
+    }
+
+    It 'cleans leading/trailing [ ] tags from a doujin-style name' {
+        Get-ArchiveBaseName 'C:\dl\[241128][circle] IVAV!! 2nd Girl Ver25.01.13 [RJ01290563].zip' |
+            Should -Be 'IVAV!! 2nd Girl Ver25.01.13'
+    }
+
+    It 'leaves full-width parentheses intact' {
+        Get-ArchiveBaseName ('C:\dl\' + $parenName + '.7z') | Should -Be $parenName
+    }
+
+    It 'keeps a name that is only a bracket tag (fallback)' {
+        Get-ArchiveBaseName 'C:\dl\[RJ01290563].zip' | Should -Be '[RJ01290563]'
+    }
+}
+
+Describe 'Get-CanonicalArchiveName / Test-IsMangledArchiveName' {
+    It 'repairs mangled archive names' -ForEach @(
+        @{ Name = 'foo.tar.zst.zst';      Expected = 'foo.tar.zst' }
+        @{ Name = 'foo.zst.zst';          Expected = 'foo.zst' }
+        @{ Name = 'foo.7z.7z';            Expected = 'foo.7z' }
+        @{ Name = 'foldername_tar_zst';   Expected = 'foldername.tar.zst' }
+        @{ Name = 'name_tar_gz';          Expected = 'name.tar.gz' }
+        @{ Name = 'name_7z';              Expected = 'name.7z' }
+        @{ Name = 'name_zip';             Expected = 'name.zip' }
+        @{ Name = 'name_rar';             Expected = 'name.rar' }
+    ) {
+        Get-CanonicalArchiveName $Name | Should -Be $Expected
+        Test-IsMangledArchiveName $Name | Should -BeTrue
+    }
+
+    It 'returns nothing for names that are already canonical or not archives' -ForEach @(
+        @{ Name = 'foo.7z' }, @{ Name = 'foo.tar.zst' }, @{ Name = 'foo.zip' },
+        @{ Name = 'foo.tar.gz' }, @{ Name = 'notes.txt' }, @{ Name = 'data_backup' }
+    ) {
+        Get-CanonicalArchiveName $Name | Should -BeNullOrEmpty
+        Test-IsMangledArchiveName $Name | Should -BeFalse
+    }
+}
+
+Describe 'Test-IsRedistExecutable' {
+    It 'flags known redistributable/prerequisite installers' -ForEach @(
+        @{ Path = 'C:\out\vcredist_x64.exe' }
+        @{ Path = 'C:\out\vc_redist.x86.exe' }
+        @{ Path = 'C:\out\DXSETUP.exe' }
+        @{ Path = 'C:\out\dotNetFx45_Full_setup.exe' }
+        @{ Path = 'C:\out\oalinst.exe' }
+        @{ Path = 'C:\game\_CommonRedist\UE4PrereqSetup_x64.exe' }
+    ) {
+        Test-IsRedistExecutable -Path $Path | Should -BeTrue
+    }
+
+    It 'does not flag a real payload executable' -ForEach @(
+        @{ Path = 'C:\out\Game.exe' }, @{ Path = 'C:\out\Setup.exe' }, @{ Path = 'C:\out\launcher.exe' }
+    ) {
+        Test-IsRedistExecutable -Path $Path | Should -BeFalse
+    }
+}
+
+Describe 'Test-DirectoryHasExecutable -IgnoreRedist' {
+    It 'ignores a redist-only layer but still sees a real payload' {
+        $d = Join-Path $TestDrive 'runtime-layer'
+        New-Item -ItemType Directory -Force -Path $d | Out-Null
+        New-Item -ItemType File -Force -Path (Join-Path $d 'vcredist_x64.exe') | Out-Null
+        New-Item -ItemType File -Force -Path (Join-Path $d 'inner.7z')         | Out-Null
+
+        Test-DirectoryHasExecutable -Dir $d | Should -BeTrue
+        Test-DirectoryHasExecutable -Dir $d -IgnoreRedist | Should -BeFalse
+    }
+
+    It 'still reports a genuine executable payload with -IgnoreRedist' {
+        $d = Join-Path $TestDrive 'payload-layer'
+        New-Item -ItemType Directory -Force -Path $d | Out-Null
+        New-Item -ItemType File -Force -Path (Join-Path $d 'vcredist_x64.exe') | Out-Null
+        New-Item -ItemType File -Force -Path (Join-Path $d 'Game.exe')         | Out-Null
+
+        Test-DirectoryHasExecutable -Dir $d -IgnoreRedist | Should -BeTrue
+    }
+}
+
+Describe 'Test-DirectoryHasFiles' {
+    It 'is true when a file exists anywhere in the tree' {
+        $d = Join-Path $TestDrive 'has-files'
+        $sub = Join-Path $d 'sub'
+        New-Item -ItemType Directory -Force -Path $sub | Out-Null
+        New-Item -ItemType File -Force -Path (Join-Path $sub 'data.bin') | Out-Null
+        Test-DirectoryHasFiles -Dir $d | Should -BeTrue
+    }
+
+    It 'is false for a directory with only empty subfolders' {
+        $d = Join-Path $TestDrive 'empty-tree'
+        New-Item -ItemType Directory -Force -Path (Join-Path $d 'sub') | Out-Null
+        Test-DirectoryHasFiles -Dir $d | Should -BeFalse
+    }
+
+    It 'is false for a missing directory' {
+        Test-DirectoryHasFiles -Dir (Join-Path $TestDrive 'nope') | Should -BeFalse
     }
 }

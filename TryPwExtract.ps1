@@ -679,6 +679,11 @@ try {
                 Remove-EmptyOutputDir -OutputDir $outputDir -SeparateFolders $SeparateFolders
             }
 
+            if ($found -and $script:LastExtractionEmpty) {
+                Write-Status "Warning: extraction succeeded but produced no files (output is empty)" "warn"
+                Write-Log "Extraction produced no files: $Archive" "WARN"
+            }
+
             $ArchiveTimingsMs += [long]$archiveStopwatch.ElapsedMilliseconds
             continue
         }
@@ -1016,6 +1021,11 @@ try {
             if (-not $FailureReasons.ContainsKey($seqReason)) { $FailureReasons[$seqReason] = 0 }
             $FailureReasons[$seqReason]++
             Remove-EmptyOutputDir -OutputDir $outputDir -SeparateFolders $SeparateFolders
+        }
+
+        if ($found -and $script:LastExtractionEmpty) {
+            Write-Status "Warning: extraction succeeded but produced no files (output is empty)" "warn"
+            Write-Log "Extraction produced no files: $Archive" "WARN"
         }
 
         $archiveStopwatch.Stop()

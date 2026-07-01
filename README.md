@@ -27,7 +27,9 @@ This project wraps 7-Zip, WinRAR/UnRAR, and PeaZip's bundled 7z with a PowerShel
 - Header-based encryption checks so unencrypted ZIP/RAR/7z files skip password cycling.
 - Test-only-then-extract mode to avoid repeated writes for every failed password.
 - Split and multi-volume archive detection, including `.001`, `.part01.rar`, and related patterns.
-- Optional recursive nested extraction with depth limits and payload-aware stopping.
+- Recursive nested extraction (on by default) with depth limits and payload-aware stopping that ignores redist/prerequisite installers when finding the real payload.
+- Repair of mangled archive names (`foo_tar_zst`, `foo.tar.zst.zst`, `foo_7z`) found inside extracted output, plus an empty-output warning when an extraction produces no files.
+- Automatic cleanup of leading/trailing bracket tag groups (`【…】`, `[…]`) from generated folder names.
 - Clear failure classification for wrong password, corrupt archive, timeout, missing volume, permission errors, and engine failures.
 - Configurable post-extraction actions, output folder naming rules, engine priority, logging, and parallelism.
 
@@ -103,11 +105,13 @@ Use the Explorer entry **Edit archive extractor config** or open the file direct
 | `usePasswordCache` | `true` | Store successful passwords and try them first later. |
 | `maxParallelArchives` | `1` | Number of archives processed at once. |
 | `maxParallelPasswords` | `1` | Number of passwords tested at once per archive. |
-| `extractNestedArchives` | `false` | Recursively extract archives found inside outputs. |
-| `maxNestedDepth` | `1` | Depth limit for nested extraction. |
+| `extractNestedArchives` | `true` | Recursively extract archives found inside outputs. |
+| `maxNestedDepth` | `5` | Depth limit for nested extraction. |
+| `redistFileNamePatterns` | *(list)* | Redist/prerequisite installer names ignored when detecting the payload (so inner archives beside a `vcredist`/`dxsetup` keep extracting). |
 | `existingOutputBehavior` | `replace` | Use `replace`, `merge`, or `new` for existing output folders. |
 | `postExtractionAction` | `prompt` | Leave, delete, or sort source archives after extraction. |
 | `engineProcessPriority` | `BelowNormal` | Lower engine process priority to keep Windows responsive. |
+| `stripBracketTagsFromFolderName` | `true` | Strip leading/trailing `【…】` and `[…]` tag groups from generated folder names. |
 | `folderNameRules` | `[]` | Regex rules for cleaning generated output folder names. |
 
 The full set of defaults is in [Modules/Config.ps1](Modules/Config.ps1).

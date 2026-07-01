@@ -94,7 +94,17 @@ function Show-ExtractionGui {
     $state = @{
         IsRunning = $false
         CancelSource = $null
-        SkipSource = $null
+        # Cross-runspace channel + worker handles for the extraction run. The heavy
+        # work runs in a dedicated runspace (see Start button) rather than a
+        # BackgroundWorker, so these hold the shared queue/channel and the
+        # PowerShell instance/timer used to marshal progress back to the UI thread.
+        Channel = $null
+        UiQueue = $null
+        Worker = $null
+        WorkerHandle = $null
+        Timer = $null
+        Finalized = $false
+        Total = 0
         OutputFolders = @()
     }
 
@@ -486,230 +496,355 @@ function Show-ExtractionGui {
         $btnClear.IsEnabled = $false
 
         $total = $archiveItems.Count
+        $state.Total = $total
+        $state.Finalized = $false
+        $state.OutputFolders = @()
 
-        $worker = New-Object System.ComponentModel.BackgroundWorker
-        $worker.WorkerReportsProgress = $true
+        # Run the heavy extraction in a DEDICATED runspace via [PowerShell]::Create
+        # (the same pattern as Modules\Parallel.ps1), NOT a BackgroundWorker. A
+        # BackgroundWorker raises DoWork on a ThreadPool thread that owns no
+        # PowerShell runspace, so its script-block delegate cannot be invoked at all
+        # ("There is no Runspace available to run scripts in this thread"). A
+        # dedicated runspace owns its own default runspace; the worker reports
+        # progress through a thread-safe queue that a DispatcherTimer drains on the
+        # UI thread (which does have a runspace), and shares the per-archive
+        # cancellation source through a synchronized channel for the Skip button.
+        $uiQueue = [System.Collections.Concurrent.ConcurrentQueue[object]]::new()
+        $channel = [hashtable]::Synchronized(@{ SkipSource = $null; Done = $false; Summary = $null })
+        $state.UiQueue = $uiQueue
+        $state.Channel = $channel
 
-        $worker.Add_DoWork({
-            param($s, $e)
-            & $ensureGuiRunspace
-            $workArgs = $e.Argument
-            $items = $workArgs.Items
-            $token = $workArgs.CancelToken
-            $separateFolders = [bool]$workArgs.SeparateFolders
-            $commonOutputDir = $workArgs.CommonOutputDir
-            $useCustomOutputDir = [bool]$workArgs.UseCustomOutputDir
-            $customOutputBase = $workArgs.CustomOutputBase
-            $passwords = @(Get-Passwords)
+        $workerConfig = @{
+            RunLogPath = $RunLogPath
+            PwFile = $PwFile
+            PwDir = $PwDir
+            CacheFile = $CacheFile
+            VerboseEngineLogging = $VerboseEngineLogging
+            TryExtractEvenIfTestFails = $TryExtractEvenIfTestFails
+            CleanFailedAttemptOutput = $CleanFailedAttemptOutput
+            SevenZipOverwriteMode = $SevenZipOverwriteMode
+            WinRarOverwriteMode = $WinRarOverwriteMode
+            UseSevenZip = $UseSevenZip
+            UseWinRarFallback = $UseWinRarFallback
+            UsePeaZipBundled7zFallback = $UsePeaZipBundled7zFallback
+            EncryptionCapableExtensions = $EncryptionCapableExtensions
+            ExecutablePayloadExtensions = $ExecutablePayloadExtensions
+            RedistFileNamePatterns = $RedistFileNamePatterns
+            StripBracketTagsFromFolderName = $StripBracketTagsFromFolderName
+            FolderNameRules = $FolderNameRules
+            ExtractionTimeoutSeconds = $ExtractionTimeoutSeconds
+            ExistingOutputBehavior = $ExistingOutputBehavior
+            UsePasswordCache = $UsePasswordCache
+            PasswordCacheRetentionDays = $PasswordCacheRetentionDays
+            LoadAllPasswordFiles = $LoadAllPasswordFiles
+            TryNoPasswordFirst = $TryNoPasswordFirst
+            CheckEncryptionBeforeCycling = $CheckEncryptionBeforeCycling
+            EngineProcessPriority = $EngineProcessPriority
+            ExtractNestedArchives = $ExtractNestedArchives
+            MaxNestedDepth = $MaxNestedDepth
+            DeleteNestedArchiveAfterExtract = $DeleteNestedArchiveAfterExtract
+        }
 
-            $sevenZip = Get-NormalSevenZipPath
-            $peaZip7z = Get-PeaZipBundledSevenZipPath
-            $winRar = Get-WinRarOrUnRarPath
+        $workerScript = {
+            param(
+                $Items, $SeparateFolders, $CommonOutputDir, $UseCustomOutputDir,
+                $CustomOutputBase, $CancelToken, $UiQueue, $Channel, $ModulesDir, $ConfigVars
+            )
 
-            $succeeded = 0
-            $failed = 0
-
-            for ($i = 0; $i -lt $items.Count; $i++) {
-                if ($token.IsCancellationRequested) { break }
-
-                $archive = $items[$i]
-                $skipSource = New-Object System.Threading.CancellationTokenSource
-                # Marshal the per-archive cancellation source through
-                # BackgroundWorker's normal progress channel. Invoking a
-                # PowerShell script block directly on Dispatcher/worker threads
-                # can fail because those threads do not own a PowerShell
-                # runspace ("There is no Runspace available...").
-                $s.ReportProgress(0, @{ Type = "CurrentSkipSource"; Source = $skipSource })
-                $attemptToken = $skipSource.Token
-                $sw = [System.Diagnostics.Stopwatch]::StartNew()
-
-                $s.ReportProgress(0, @{ Type = "Status"; Index = $i; Text = "Testing..."; Overall = [math]::Floor(($i / $items.Count) * 100) })
-
-                $enginePlan = @(Get-EnginePlanForArchive -Archive $archive -SevenZip $sevenZip -PeaZip7z $peaZip7z -WinRar $winRar)
-                if ($enginePlan.Count -eq 0) {
-                    $sw.Stop()
-                    $s.ReportProgress(0, @{ Type = "Result"; Index = $i; Status = "No Engine"; Password = ""; RealPassword = ""; Time = (Format-Elapsed $sw) })
-                    $s.ReportProgress(0, @{ Type = "CurrentSkipSource"; Source = $null })
-                    $skipSource.Dispose()
-                    $failed++
-                    continue
+            try {
+                foreach ($key in $ConfigVars.Keys) {
+                    Set-Variable -Name $key -Value $ConfigVars[$key] -Scope 0
                 }
 
-                $archiveDir = Split-Path $archive -Parent
-                $archiveBase = Get-ArchiveBaseName $archive
-                if ($separateFolders) {
-                    $outputBaseDir = if ($useCustomOutputDir) { $customOutputBase } else { $archiveDir }
-                    $outputDir = Join-Path $outputBaseDir $archiveBase
-                    $outputDir = Resolve-OutputDir -BaseDir $outputDir -IsSharedOutput $false
-                } else {
-                    $outputDir = Resolve-OutputDir -BaseDir $commonOutputDir -IsSharedOutput $true
-                }
+                . "$ModulesDir\Logging.ps1"
+                . "$ModulesDir\ConsoleUI.ps1"
+                . "$ModulesDir\ArchiveUtils.ps1"
+                . "$ModulesDir\Extraction.ps1"
+                . "$ModulesDir\Passwords.ps1"
+                . "$ModulesDir\NestedExtraction.ps1"
 
-                $isEncryptable = Test-IsEncryptionCapable $archive
-                if ($isEncryptable -and $CheckEncryptionBeforeCycling -and $sevenZip) {
-                    $enc = Test-ArchiveIsEncrypted -Archive $archive -SevenZipPath $sevenZip -CancelToken $attemptToken
-                    if ($enc -eq $false) { $isEncryptable = $false }
-                }
+                $token = $CancelToken
+                $separateFolders = [bool]$SeparateFolders
+                $passwords = @(Get-Passwords)
 
-                $found = $false
+                $sevenZip = Get-NormalSevenZipPath
+                $peaZip7z = Get-PeaZipBundledSevenZipPath
+                $winRar = Get-WinRarOrUnRarPath
 
-                # The encryption probe above runs its own engine process; if the
-                # user pressed Skip Current/Cancel while it was running, stop now
-                # instead of cycling passwords or launching further engine
-                # processes on this archive.
-                if ($attemptToken.IsCancellationRequested -or $token.IsCancellationRequested) {
-                    $sw.Stop()
-                    $s.ReportProgress(0, @{ Type = "Result"; Index = $i; Status = "Skipped"; Password = ""; RealPassword = ""; Time = (Format-Elapsed $sw) })
-                    Remove-EmptyOutputDir -OutputDir $outputDir -SeparateFolders $separateFolders
-                    $s.ReportProgress(0, @{ Type = "CurrentSkipSource"; Source = $null })
-                    $skipSource.Dispose()
-                    continue
-                }
+                $succeeded = 0
+                $failed = 0
+                $lastSuccessfulPassword = $null
+                $outputFolders = New-Object System.Collections.Generic.List[string]
 
-                if (-not $isEncryptable) {
-                    foreach ($engine in $enginePlan) {
-                        $ok = Try-EnginePassword -EngineName $engine.Name -EnginePath $engine.Path -Archive $archive -Password "" -OutputDir $outputDir -CanClearFailedOutput $separateFolders -OmitPasswordArg $true -Timeout $ExtractionTimeoutSeconds -CancelToken $attemptToken
-                        if ($attemptToken.IsCancellationRequested) { break }
-                        if ($ok) {
-                            $sw.Stop()
-                            $s.ReportProgress(0, @{ Type = "Result"; Index = $i; Status = "Success"; Password = "(none)"; RealPassword = ""; Time = (Format-Elapsed $sw); OutputDir = $outputDir })
-                            $succeeded++
-                            $found = $true
-                            break
-                        }
+                for ($i = 0; $i -lt $Items.Count; $i++) {
+                    if ($token.IsCancellationRequested) { break }
+
+                    $archive = $Items[$i]
+                    $skipSource = New-Object System.Threading.CancellationTokenSource
+                    # Publish the per-archive cancellation source so the UI's Skip
+                    # Current button can cancel just this archive.
+                    $Channel.SkipSource = $skipSource
+                    $attemptToken = $skipSource.Token
+                    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+
+                    $UiQueue.Enqueue(@{ Type = "Status"; Index = $i; Text = "Testing..."; Overall = [math]::Floor(($i / $Items.Count) * 100) })
+
+                    $enginePlan = @(Get-EnginePlanForArchive -Archive $archive -SevenZip $sevenZip -PeaZip7z $peaZip7z -WinRar $winRar)
+                    if ($enginePlan.Count -eq 0) {
+                        $sw.Stop()
+                        $UiQueue.Enqueue(@{ Type = "Result"; Index = $i; Status = "No Engine"; Password = ""; RealPassword = ""; Time = (Format-Elapsed $sw) })
+                        $Channel.SkipSource = $null
+                        $skipSource.Dispose()
+                        $failed++
+                        continue
                     }
-                } else {
-                    $pwIndex = 0
-                    foreach ($pw in $passwords) {
-                        if ($token.IsCancellationRequested) { break }
-                        $pwIndex++
 
-                        $currentPct = [math]::Floor(($pwIndex / $passwords.Count) * 100)
-                        $s.ReportProgress(0, @{ Type = "Password"; Index = $i; Current = $pwIndex; Total = $passwords.Count; Pct = $currentPct })
+                    $archiveDir = Split-Path $archive -Parent
+                    $archiveBase = Get-ArchiveBaseName $archive
+                    if ($separateFolders) {
+                        $outputBaseDir = if ($UseCustomOutputDir) { $CustomOutputBase } else { $archiveDir }
+                        $outputDir = Join-Path $outputBaseDir $archiveBase
+                        $outputDir = Resolve-OutputDir -BaseDir $outputDir -IsSharedOutput $false
+                    } else {
+                        $outputDir = Resolve-OutputDir -BaseDir $CommonOutputDir -IsSharedOutput $true
+                    }
 
+                    $isEncryptable = Test-IsEncryptionCapable $archive
+                    if ($isEncryptable -and $CheckEncryptionBeforeCycling -and $sevenZip) {
+                        $enc = Test-ArchiveIsEncrypted -Archive $archive -SevenZipPath $sevenZip -CancelToken $attemptToken
+                        if ($enc -eq $false) { $isEncryptable = $false }
+                    }
+
+                    $found = $false
+
+                    # The encryption probe above runs its own engine process; if the
+                    # user pressed Skip Current/Cancel while it was running, stop now
+                    # instead of cycling passwords on this archive.
+                    if ($attemptToken.IsCancellationRequested -or $token.IsCancellationRequested) {
+                        $sw.Stop()
+                        $UiQueue.Enqueue(@{ Type = "Result"; Index = $i; Status = "Skipped"; Password = ""; RealPassword = ""; Time = (Format-Elapsed $sw) })
+                        Remove-EmptyOutputDir -OutputDir $outputDir -SeparateFolders $separateFolders
+                        $Channel.SkipSource = $null
+                        $skipSource.Dispose()
+                        continue
+                    }
+
+                    if (-not $isEncryptable) {
                         foreach ($engine in $enginePlan) {
-                            $testOk = Try-EnginePassword -EngineName $engine.Name -EnginePath $engine.Path -Archive $archive -Password $pw -OutputDir $outputDir -CanClearFailedOutput $separateFolders -Timeout $ExtractionTimeoutSeconds -TestOnly $true -CancelToken $attemptToken
+                            $ok = Try-EnginePassword -EngineName $engine.Name -EnginePath $engine.Path -Archive $archive -Password "" -OutputDir $outputDir -CanClearFailedOutput $separateFolders -OmitPasswordArg $true -Timeout $ExtractionTimeoutSeconds -CancelToken $attemptToken
                             if ($attemptToken.IsCancellationRequested) { break }
-                            if ($testOk) {
-                                $extractOk = Try-EnginePassword -EngineName $engine.Name -EnginePath $engine.Path -Archive $archive -Password $pw -OutputDir $outputDir -CanClearFailedOutput $separateFolders -Timeout $ExtractionTimeoutSeconds -TestOnly $false -CancelToken $attemptToken
-                                if ($extractOk) {
-                                    $sw.Stop()
-                                    $masked = Format-MaskedPassword $pw
-                                    Save-PasswordToCache $pw
-                                    $s.ReportProgress(0, @{ Type = "Result"; Index = $i; Status = "Success"; Password = $masked; RealPassword = $pw; Time = (Format-Elapsed $sw); OutputDir = $outputDir })
-                                    $succeeded++
-                                    $found = $true
-                                    break
-                                }
+                            if ($ok) {
+                                $sw.Stop()
+                                $isEmpty = [bool]$script:LastExtractionEmpty
+                                $statusText = if ($isEmpty) { "Success (empty)" } else { "Success" }
+                                $UiQueue.Enqueue(@{ Type = "Result"; Index = $i; Status = $statusText; Password = "(none)"; RealPassword = ""; Time = (Format-Elapsed $sw); OutputDir = $outputDir })
+                                if ($isEmpty) { $UiQueue.Enqueue(@{ Type = "Log"; Text = "[Empty] $([IO.Path]::GetFileName($archive)) extracted but produced no files" }) }
+                                [void]$outputFolders.Add($outputDir)
+                                $succeeded++
+                                $found = $true
+                                break
                             }
                         }
-                        if ($found -or $attemptToken.IsCancellationRequested) { break }
+                    } else {
+                        $pwIndex = 0
+                        foreach ($pw in $passwords) {
+                            if ($token.IsCancellationRequested) { break }
+                            $pwIndex++
+
+                            $currentPct = [math]::Floor(($pwIndex / $passwords.Count) * 100)
+                            $UiQueue.Enqueue(@{ Type = "Password"; Index = $i; Current = $pwIndex; Total = $passwords.Count; Pct = $currentPct })
+
+                            foreach ($engine in $enginePlan) {
+                                $testOk = Try-EnginePassword -EngineName $engine.Name -EnginePath $engine.Path -Archive $archive -Password $pw -OutputDir $outputDir -CanClearFailedOutput $separateFolders -Timeout $ExtractionTimeoutSeconds -TestOnly $true -CancelToken $attemptToken
+                                if ($attemptToken.IsCancellationRequested) { break }
+                                if ($testOk) {
+                                    $extractOk = Try-EnginePassword -EngineName $engine.Name -EnginePath $engine.Path -Archive $archive -Password $pw -OutputDir $outputDir -CanClearFailedOutput $separateFolders -Timeout $ExtractionTimeoutSeconds -TestOnly $false -CancelToken $attemptToken
+                                    if ($extractOk) {
+                                        $sw.Stop()
+                                        $masked = Format-MaskedPassword $pw
+                                        Save-PasswordToCache $pw
+                                        $lastSuccessfulPassword = $pw
+                                        $isEmpty = [bool]$script:LastExtractionEmpty
+                                        $statusText = if ($isEmpty) { "Success (empty)" } else { "Success" }
+                                        $UiQueue.Enqueue(@{ Type = "Result"; Index = $i; Status = $statusText; Password = $masked; RealPassword = $pw; Time = (Format-Elapsed $sw); OutputDir = $outputDir })
+                                        if ($isEmpty) { $UiQueue.Enqueue(@{ Type = "Log"; Text = "[Empty] $([IO.Path]::GetFileName($archive)) extracted but produced no files" }) }
+                                        [void]$outputFolders.Add($outputDir)
+                                        $succeeded++
+                                        $found = $true
+                                        break
+                                    }
+                                }
+                            }
+                            if ($found -or $attemptToken.IsCancellationRequested) { break }
+                        }
+                    }
+
+                    if ($attemptToken.IsCancellationRequested) {
+                        $sw.Stop()
+                        $UiQueue.Enqueue(@{ Type = "Result"; Index = $i; Status = "Skipped"; Password = ""; RealPassword = ""; Time = (Format-Elapsed $sw) })
+                        Remove-EmptyOutputDir -OutputDir $outputDir -SeparateFolders $separateFolders
+                    } elseif (-not $found) {
+                        $sw.Stop()
+                        $UiQueue.Enqueue(@{ Type = "Result"; Index = $i; Status = "Failed"; Password = ""; RealPassword = ""; Time = (Format-Elapsed $sw) })
+                        Remove-EmptyOutputDir -OutputDir $outputDir -SeparateFolders $separateFolders
+                        $failed++
+                    }
+                    $Channel.SkipSource = $null
+                    $skipSource.Dispose()
+                }
+
+                # Post-pass: recursively extract archives found inside the freshly
+                # extracted output (inner archives beside redist installers, mangled
+                # tar.zst names, etc.). Mirrors the console flow.
+                $nestedExtracted = 0
+                $nestedFailed = 0
+                if ($ExtractNestedArchives -and $MaxNestedDepth -ge 1 -and $outputFolders.Count -gt 0 -and -not $token.IsCancellationRequested) {
+                    $UiQueue.Enqueue(@{ Type = "Log"; Text = "Scanning $($outputFolders.Count) output folder(s) for nested archives..." })
+                    $nestedResults = @(Invoke-NestedExtractionPass -SeedFolders ($outputFolders.ToArray()) -Passwords $passwords -SevenZip $sevenZip -PeaZip7z $peaZip7z -WinRar $winRar -MaxDepth $MaxNestedDepth -Timeout $ExtractionTimeoutSeconds -InitialLastPassword $lastSuccessfulPassword -CancelToken $token)
+                    foreach ($r in $nestedResults) {
+                        $nm = [IO.Path]::GetFileName([string]$r.Archive)
+                        if ($r.Status -eq "Succeeded" -or $r.Status -eq "NoPassword") {
+                            $nestedExtracted++
+                            $UiQueue.Enqueue(@{ Type = "Log"; Text = "[Nested depth $($r.Depth)] extracted $nm" })
+                        } elseif ($r.Status -eq "Skipped") {
+                            $UiQueue.Enqueue(@{ Type = "Log"; Text = "[Nested] skipped $nm" })
+                        } else {
+                            $nestedFailed++
+                            $UiQueue.Enqueue(@{ Type = "Log"; Text = "[Nested] FAILED $nm ($($r.Reason))" })
+                        }
+                    }
+                    if ($nestedExtracted -gt 0 -or $nestedFailed -gt 0) {
+                        $UiQueue.Enqueue(@{ Type = "Log"; Text = "Nested archives: $nestedExtracted extracted, $nestedFailed failed" })
                     }
                 }
 
-                if ($attemptToken.IsCancellationRequested) {
-                    $sw.Stop()
-                    $s.ReportProgress(0, @{ Type = "Result"; Index = $i; Status = "Skipped"; Password = ""; RealPassword = ""; Time = (Format-Elapsed $sw) })
-                    Remove-EmptyOutputDir -OutputDir $outputDir -SeparateFolders $separateFolders
-                } elseif (-not $found) {
-                    $sw.Stop()
-                    $s.ReportProgress(0, @{ Type = "Result"; Index = $i; Status = "Failed"; Password = ""; RealPassword = ""; Time = (Format-Elapsed $sw) })
-                    Remove-EmptyOutputDir -OutputDir $outputDir -SeparateFolders $separateFolders
-                    $failed++
-                }
-                $s.ReportProgress(0, @{ Type = "CurrentSkipSource"; Source = $null })
-                $skipSource.Dispose()
+                $Channel.Summary = @{ Succeeded = $succeeded; Failed = $failed; NestedExtracted = $nestedExtracted; NestedFailed = $nestedFailed }
+            } catch {
+                $Channel.Summary = @{ Error = $_.Exception.Message }
+                try { $UiQueue.Enqueue(@{ Type = "Log"; Text = "Error: $($_.Exception.Message)" }) } catch {}
+            } finally {
+                $Channel.Done = $true
+                $UiQueue.Enqueue(@{ Type = "Done" })
             }
+        }
 
-            $e.Result = @{ Succeeded = $succeeded; Failed = $failed }
-        })
+        $ps = [PowerShell]::Create()
+        [void]$ps.AddScript($workerScript)
+        [void]$ps.AddArgument($archives)
+        [void]$ps.AddArgument($separateFolders)
+        [void]$ps.AddArgument($commonOutputDir)
+        [void]$ps.AddArgument($useCustomOutputDir)
+        [void]$ps.AddArgument($customOutputBase)
+        [void]$ps.AddArgument($state.CancelSource.Token)
+        [void]$ps.AddArgument($uiQueue)
+        [void]$ps.AddArgument($channel)
+        [void]$ps.AddArgument($ModulesDir)
+        [void]$ps.AddArgument($workerConfig)
 
-        $worker.Add_ProgressChanged({
-            param($s, $e)
+        $state.Worker = $ps
+        $state.WorkerHandle = $ps.BeginInvoke()
+
+        # Drain the worker's progress queue on the UI thread. This tick handler runs
+        # on the dispatcher thread (which owns a runspace), so all UI mutation is
+        # safe here.
+        $drainTick = {
             & $ensureGuiRunspace
-            $data = $e.UserState
-            switch ($data.Type) {
-                "CurrentSkipSource" {
-                    $state.SkipSource = $data.Source
-                }
-                "Status" {
-                    $idx = $data.Index
-                    if ($idx -lt $archiveItems.Count) {
-                        $item = $archiveItems[$idx]
-                        $item.Status = $data.Text
-                        $dgArchives.Items.Refresh()
+            $q = $state.UiQueue
+            if ($q) {
+                $msg = $null
+                while ($q.TryDequeue([ref]$msg)) {
+                    switch ($msg.Type) {
+                        "Status" {
+                            $idx = $msg.Index
+                            if ($idx -lt $archiveItems.Count) {
+                                $archiveItems[$idx].Status = $msg.Text
+                                $dgArchives.Items.Refresh()
+                            }
+                            $pbOverall.Value = $msg.Overall
+                            $txtOverallProgress.Text = "Processing archive $($idx + 1) / $($state.Total)"
+                        }
+                        "Password" {
+                            $pbCurrent.Value = $msg.Pct
+                            $txtCurrentProgress.Text = "Password $($msg.Current) / $($msg.Total)"
+                        }
+                        "Result" {
+                            $idx = $msg.Index
+                            if ($idx -lt $archiveItems.Count) {
+                                $item = $archiveItems[$idx]
+                                $item.Status = $msg.Status
+                                $item.Password = $msg.Password
+                                if ($msg.ContainsKey("RealPassword")) { $item.RealPassword = $msg.RealPassword }
+                                $item.Time = $msg.Time
+                                if ($msg.OutputDir) { $item.OutputDir = $msg.OutputDir }
+                                $dgArchives.Items.Refresh()
+                                & $appendLog "[$($msg.Status)] $($item.Name) ($($msg.Time))"
+                            }
+                            if ($msg.OutputDir) { $state.OutputFolders += $msg.OutputDir }
+                        }
+                        "Log" {
+                            & $appendLog $msg.Text
+                        }
+                        default { }
                     }
-                    $pbOverall.Value = $data.Overall
-                    $txtOverallProgress.Text = "Processing archive $($idx + 1) / $total"
-                }
-                "Password" {
-                    $pbCurrent.Value = $data.Pct
-                    $txtCurrentProgress.Text = "Password $($data.Current) / $($data.Total)"
-                }
-                "Result" {
-                    $idx = $data.Index
-                    if ($idx -lt $archiveItems.Count) {
-                        $item = $archiveItems[$idx]
-                        $item.Status = $data.Status
-                        $item.Password = $data.Password
-                        if ($data.ContainsKey("RealPassword")) { $item.RealPassword = $data.RealPassword }
-                        $item.Time = $data.Time
-                        if ($data.OutputDir) { $item.OutputDir = $data.OutputDir }
-                        $dgArchives.Items.Refresh()
-                    }
-                    if ($data.OutputDir) {
-                        $state.OutputFolders += $data.OutputDir
-                    }
-                    & $appendLog "[$($data.Status)] $($archiveItems[$idx].Name) ($($data.Time))"
                 }
             }
-        })
 
-        $worker.Add_RunWorkerCompleted({
-            param($s, $e)
-            & $ensureGuiRunspace
-            $state.IsRunning = $false
-            $btnStart.IsEnabled = $true
-            $btnCancel.IsEnabled = $false
-            $btnSkip.IsEnabled = $false
-            $state.SkipSource = $null
-            $btnAddFiles.IsEnabled = $true
-            $btnAddFolder.IsEnabled = $true
-            $btnRemove.IsEnabled = $true
-            $btnClear.IsEnabled = $true
-            $pbCurrent.Value = 0
-            $txtCurrentProgress.Text = ""
+            if ($state.Channel -and $state.Channel.Done -and -not $state.Finalized) {
+                $state.Finalized = $true
+                if ($state.Timer) { $state.Timer.Stop() }
 
-            if ($e.Error) {
-                & $appendLog "Error: $($e.Error.Message)"
-                $pbOverall.Value = 0
-                $txtOverallProgress.Text = "Error occurred"
-            } else {
-                $r = $e.Result
-                $pbOverall.Value = 100
-                $txtOverallProgress.Text = "Done: $($r.Succeeded) succeeded, $($r.Failed) failed"
-                if ($state.OutputFolders.Count -gt 0) {
-                    $btnOpenOutput.IsEnabled = $true
+                $workerError = $null
+                try { $state.Worker.EndInvoke($state.WorkerHandle) } catch { $workerError = $_.Exception.Message }
+                try { $state.Worker.Runspace.Dispose() } catch {}
+                try { $state.Worker.Dispose() } catch {}
+                $state.Worker = $null
+
+                $state.IsRunning = $false
+                $btnStart.IsEnabled = $true
+                $btnCancel.IsEnabled = $false
+                $btnSkip.IsEnabled = $false
+                $btnAddFiles.IsEnabled = $true
+                $btnAddFolder.IsEnabled = $true
+                $btnRemove.IsEnabled = $true
+                $btnClear.IsEnabled = $true
+                $pbCurrent.Value = 0
+                $txtCurrentProgress.Text = ""
+                $state.Channel.SkipSource = $null
+
+                $summary = $state.Channel.Summary
+                if ($workerError -or ($summary -and $summary.ContainsKey("Error"))) {
+                    $emsg = if ($workerError) { $workerError } else { $summary.Error }
+                    & $appendLog "Error: $emsg"
+                    $pbOverall.Value = 0
+                    $txtOverallProgress.Text = "Error occurred"
+                } else {
+                    $succeededCount = [int]$summary.Succeeded
+                    $failedCount = [int]$summary.Failed
+                    $pbOverall.Value = 100
+                    $nestedNote = ""
+                    if ($summary.ContainsKey("NestedExtracted") -and ([int]$summary.NestedExtracted -gt 0 -or [int]$summary.NestedFailed -gt 0)) {
+                        $nestedNote = "; nested $([int]$summary.NestedExtracted) extracted"
+                        if ([int]$summary.NestedFailed -gt 0) { $nestedNote += ", $([int]$summary.NestedFailed) failed" }
+                    }
+                    $txtOverallProgress.Text = "Done: $succeededCount succeeded, $failedCount failed$nestedNote"
+                    if ($state.OutputFolders.Count -gt 0) { $btnOpenOutput.IsEnabled = $true }
+                    Show-CompletionToast -Succeeded $succeededCount -Failed $failedCount -Total $state.Total
                 }
-                Show-CompletionToast -Succeeded $r.Succeeded -Failed $r.Failed -Total $total
             }
-        })
+        }
 
-        $worker.RunWorkerAsync(@{
-            Items = $archives
-            CancelToken = $state.CancelSource.Token
-            SeparateFolders = $separateFolders
-            CommonOutputDir = $commonOutputDir
-            UseCustomOutputDir = $useCustomOutputDir
-            CustomOutputBase = $customOutputBase
-        })
+        $timer = New-Object System.Windows.Threading.DispatcherTimer
+        $timer.Interval = [TimeSpan]::FromMilliseconds(120)
+        $timer.Add_Tick($drainTick)
+        $state.Timer = $timer
+        $timer.Start()
     })
 
     $btnCancel.Add_Click({
         if ($state.CancelSource) {
             $state.CancelSource.Cancel()
-            if ($state.SkipSource) {
-                try { $state.SkipSource.Cancel() } catch {}
+            if ($state.Channel -and $state.Channel.SkipSource) {
+                try { $state.Channel.SkipSource.Cancel() } catch {}
             }
             & $appendLog "Cancellation requested..."
             $btnCancel.IsEnabled = $false
@@ -717,8 +852,9 @@ function Show-ExtractionGui {
     })
 
     $btnSkip.Add_Click({
-        if ($state.IsRunning -and $state.SkipSource) {
-            try { $state.SkipSource.Cancel() } catch {}
+        $skip = if ($state.Channel) { $state.Channel.SkipSource } else { $null }
+        if ($state.IsRunning -and $skip) {
+            try { $skip.Cancel() } catch {}
             & $appendLog "Skipping the current archive..."
         }
     })
@@ -744,8 +880,8 @@ function Show-ExtractionGui {
                 return
             }
             if ($state.CancelSource) { $state.CancelSource.Cancel() }
-            if ($state.SkipSource) {
-                try { $state.SkipSource.Cancel() } catch {}
+            if ($state.Channel -and $state.Channel.SkipSource) {
+                try { $state.Channel.SkipSource.Cancel() } catch {}
             }
         } elseif ($ConfirmGuiClose -and $archiveItems.Count -gt 0) {
             $r = [System.Windows.MessageBox]::Show(

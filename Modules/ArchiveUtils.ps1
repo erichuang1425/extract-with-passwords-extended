@@ -84,6 +84,56 @@ function Convert-FolderNameWithRules {
     return $Name.Trim()
 }
 
+function Remove-BracketTagFromName {
+    # Strip leading and trailing bracket "tag" groups -- fullwidth CJK brackets
+    # (U+3010 / U+3011) and square [...] -- from a derived folder name, e.g.
+    #   [PC+KR...]Title                  -> Title
+    #   [241128][circle] Real Title [RJ01290563]  -> Real Title
+    # Only groups at the very start/end are removed; parentheses ()/fullwidth
+    # parens and any brackets in the middle of a title are left intact. If
+    # stripping would leave nothing meaningful, the original name is returned.
+    param([string]$Name)
+
+    if ([string]::IsNullOrWhiteSpace($Name)) { return $Name }
+
+    # A bracket group is an opener (U+3010 or '[') followed by non-bracket content
+    # and a closer (U+3011 or ']'). Edge-anchored so only leading and trailing tags
+    # are removed. The full-width brackets are built from code points ([char]0x3010
+    # / 0x3011) so the source stays pure-ASCII and does not depend on how this file
+    # is decoded (Windows PowerShell reads a no-BOM script as ANSI, which would
+    # otherwise corrupt literal full-width bracket characters in the pattern).
+    $ob = [char]0x3010   # fullwidth left bracket
+    $cb = [char]0x3011   # fullwidth right bracket
+    $openCls  = '[' + $ob + '\[]'
+    $closeCls = '[' + $cb + '\]]'
+    $bodyCls  = '[^' + $ob + '\[' + $cb + '\]]*'
+    $leading  = '^\s*' + $openCls + $bodyCls + $closeCls + '\s*'
+    $trailing = '\s*' + $openCls + $bodyCls + $closeCls + '\s*$'
+
+    $result = $Name
+    $changed = $true
+    while ($changed) {
+        $changed = $false
+
+        # Never strip the last remaining group if doing so empties the name.
+        $next = [regex]::Replace($result, $leading, '')
+        if ($next -ne $result -and -not [string]::IsNullOrWhiteSpace($next)) {
+            $result = $next
+            $changed = $true
+        }
+
+        $next = [regex]::Replace($result, $trailing, '')
+        if ($next -ne $result -and -not [string]::IsNullOrWhiteSpace($next)) {
+            $result = $next
+            $changed = $true
+        }
+    }
+
+    $result = $result.Trim()
+    if ([string]::IsNullOrWhiteSpace($result)) { return $Name }
+    return $result
+}
+
 function Get-ArchiveBaseName {
     param([string]$Path)
 
@@ -122,13 +172,25 @@ function Get-ArchiveBaseName {
         "\.dmg$"
     )
 
+    $stem = $null
     foreach ($pattern in $patterns) {
         if ($name -imatch $pattern) {
-            return Sanitize-FileName (Convert-FolderNameWithRules ($name -ireplace $pattern, ""))
+            $stem = ($name -ireplace $pattern, "")
+            break
         }
     }
+    if ($null -eq $stem) {
+        $stem = [IO.Path]::GetFileNameWithoutExtension($name)
+    }
 
-    return Sanitize-FileName (Convert-FolderNameWithRules ([IO.Path]::GetFileNameWithoutExtension($name)))
+    # Drop leading/trailing bracket tag groups (【PC】, [RJ...], release codes)
+    # before user rules run, so a configured FolderNameRule still sees and can
+    # refine the cleaned title.
+    if ($StripBracketTagsFromFolderName) {
+        $stem = Remove-BracketTagFromName $stem
+    }
+
+    return Sanitize-FileName (Convert-FolderNameWithRules $stem)
 }
 
 function Test-IsSupportedArchiveName {
@@ -230,11 +292,99 @@ function Get-ExpectedTarResidueName {
     return $null
 }
 
+function Get-CanonicalArchiveName {
+    # Repair a mangled archive file *name* back to its canonical form so the
+    # engine — and the base-name / compound-tar residue logic — recognize it.
+    # Handles two manglings commonly seen in downloaded/extracted content:
+    #   * a doubled compression/archive tail:
+    #       foo.tar.zst.zst -> foo.tar.zst, foo.zst.zst -> foo.zst, foo.7z.7z -> foo.7z
+    #   * underscores where dots belong:
+    #       foldername_tar_zst -> foldername.tar.zst, name_tar_gz -> name.tar.gz,
+    #       name_7z -> name.7z, name_zip -> name.zip
+    # Returns the corrected file name, or $null when $Name is not a recognizable
+    # mangled archive name (names already canonical return $null too).
+    param([string]$Name)
+
+    if ([string]::IsNullOrWhiteSpace($Name)) { return $null }
+
+    $original = [IO.Path]::GetFileName($Name)
+    $candidate = $original
+    $ic = [System.Text.RegularExpressions.RegexOptions]::IgnoreCase
+
+    # 1) Collapse a doubled tail (.X.X -> .X), e.g. foo.tar.zst.zst -> foo.tar.zst.
+    $candidate = [regex]::Replace(
+        $candidate,
+        '\.(?<ext>zst|gz|bz2|xz|lzma|lz4|br|7z|zip|zipx|rar|tar|cab|iso|wim)\.\k<ext>$',
+        '.${ext}', $ic)
+
+    # 2) Underscore-mangled compound-tar tail: _tar_<comp> -> .tar.<comp>, or a
+    #    lone _<comp> -> .<comp> (compression extensions only).
+    $candidate = [regex]::Replace(
+        $candidate,
+        '_(?<tar>tar_)?(?<comp>zst|gz|bz2|xz|lzma|lz4|br)$',
+        {
+            param($m)
+            if ($m.Groups['tar'].Success) { ".tar.$($m.Groups['comp'].Value)" }
+            else { ".$($m.Groups['comp'].Value)" }
+        }, $ic)
+
+    # 3) Underscore-mangled single container extension: name_7z -> name.7z, etc.
+    $candidate = [regex]::Replace(
+        $candidate,
+        '_(?<ext>7z|zip|zipx|rar|tar|tgz|tbz2|txz|tzst|cab|iso|wim|img|dmg)$',
+        '.${ext}', $ic)
+
+    if ($candidate -ceq $original) { return $null }
+    return $candidate
+}
+
+function Test-IsMangledArchiveName {
+    # True when the file name is a recognizable but mangled archive name that
+    # Get-CanonicalArchiveName can repair (e.g. foo_tar_zst, foo_7z, foo.zst.zst).
+    param([string]$Path)
+
+    return ($null -ne (Get-CanonicalArchiveName ([IO.Path]::GetFileName($Path))))
+}
+
+function Test-IsRedistExecutable {
+    # True when an executable is a redistributable/prerequisite installer rather
+    # than the real payload — judged by file name (vcredist, dxsetup, dotnet, …)
+    # or by living under a redist/prerequisites folder. Lets the nested pass keep
+    # descending past a layer whose only .exe is a runtime installer.
+    param([string]$Path)
+
+    if ([string]::IsNullOrWhiteSpace($Path)) { return $false }
+
+    $leaf = [IO.Path]::GetFileName($Path)
+    $patterns = if ($null -ne $RedistFileNamePatterns) { @($RedistFileNamePatterns) } else { @() }
+    foreach ($pat in $patterns) {
+        if ([string]::IsNullOrWhiteSpace($pat)) { continue }
+        try {
+            if ($leaf -imatch $pat) { return $true }
+        } catch {
+            # Ignore a bad user-supplied pattern rather than aborting the scan.
+        }
+    }
+
+    $dir = [string](Split-Path $Path -Parent)
+    if ($dir -imatch 'redist|prerequisite|prereq|commonredist|directx') {
+        return $true
+    }
+
+    return $false
+}
+
 function Test-DirectoryHasExecutable {
     # True when the directory tree contains at least one executable payload file
     # (see $ExecutablePayloadExtensions). Used by the nested pass to decide that a
-    # layer has yielded its final output and recursion should stop.
-    param([string]$Dir)
+    # layer has yielded its final output and recursion should stop. With
+    # -IgnoreRedist, redistributable/prerequisite installers (vcredist, dxsetup,
+    # …) do not count — so a layer whose only .exe is a runtime installer sitting
+    # beside a still-packed archive is not mistaken for the final payload.
+    param(
+        [string]$Dir,
+        [switch]$IgnoreRedist
+    )
 
     if ([string]::IsNullOrWhiteSpace($Dir) -or !(Test-Path -LiteralPath $Dir)) {
         return $false
@@ -245,6 +395,9 @@ function Test-DirectoryHasExecutable {
     try {
         foreach ($file in (Get-ChildItem -LiteralPath $Dir -Recurse -File -Force -ErrorAction SilentlyContinue)) {
             if ($exeExts -contains $file.Extension.ToLowerInvariant()) {
+                if ($IgnoreRedist -and (Test-IsRedistExecutable -Path $file.FullName)) {
+                    continue
+                }
                 return $true
             }
         }
@@ -560,7 +713,11 @@ function Find-NestedArchives {
 
         if ($childFiles) {
             foreach ($filePath in $childFiles) {
-                if ((Test-IsSupportedArchiveName $filePath) -and (Test-IsFirstVolumeOrNormalArchive $filePath)) {
+                # Include normal entry archives, plus files whose archive extension
+                # was mangled (foo_tar_zst, foo_7z, foo.zst.zst) so they still get
+                # picked up and repaired by the nested pass.
+                if (((Test-IsSupportedArchiveName $filePath) -and (Test-IsFirstVolumeOrNormalArchive $filePath)) -or
+                    (Test-IsMangledArchiveName $filePath)) {
                     [void]$archives.Add($filePath)
                 }
             }
@@ -789,6 +946,24 @@ function Get-DirectoryItemCount {
         return @(Get-ChildItem -LiteralPath $Dir -Force -Recurse -ErrorAction SilentlyContinue).Count
     } catch {
         return 0
+    }
+}
+
+function Test-DirectoryHasFiles {
+    # True when the directory tree contains at least one file (empty subfolders do
+    # not count). Used to flag a "successful" extraction that produced no files.
+    param([string]$Dir)
+
+    if ([string]::IsNullOrWhiteSpace($Dir) -or !(Test-Path -LiteralPath $Dir)) {
+        return $false
+    }
+
+    try {
+        $first = Get-ChildItem -LiteralPath $Dir -Recurse -File -Force -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+        return ($null -ne $first)
+    } catch {
+        return $false
     }
 }
 

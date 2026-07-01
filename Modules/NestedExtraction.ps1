@@ -61,13 +61,16 @@ function Invoke-NestedExtractionPass {
         $nested = @(Find-NestedArchives -Root $folder)
         if ($nested.Count -eq 0) { continue }
 
-        # Stop at the payload layer: if this layer already contains an executable
-        # payload (.exe/.msi/...), treat it as the intended final output and do not
-        # extract any archive sitting alongside it. Applied here — before scanning
-        # a dequeued folder — it gates the seed (main output) folders *and* every
-        # deeper layer alike, so the first layer that yields an executable ends the
-        # descent.
-        if (Test-DirectoryHasExecutable -Dir $folder) {
+        # Stop at the payload layer: if this layer already contains a *real*
+        # executable payload (.exe/.msi/...), treat it as the intended final output
+        # and do not extract any archive sitting alongside it. Redistributable and
+        # prerequisite installers (vcredist, dxsetup, .NET, …) are ignored via
+        # -IgnoreRedist, so a layer whose only .exe is a runtime installer next to a
+        # still-packed archive keeps descending. Applied here — before scanning a
+        # dequeued folder — it gates the seed (main output) folders *and* every
+        # deeper layer alike, so the first layer that yields a real executable ends
+        # the descent.
+        if (Test-DirectoryHasExecutable -Dir $folder -IgnoreRedist) {
             Write-Status "Reached an executable payload; skipping nested archives in this layer." "dim"
             Write-Log "Nested scan skipped for $folder (executable payload present)."
             continue
@@ -82,6 +85,29 @@ function Invoke-NestedExtractionPass {
             $archiveKey = Get-NormalizedPathKey $archive
             if ($archiveKey -and $visitedArchives.ContainsKey($archiveKey)) { continue }
             if ($archiveKey) { $visitedArchives[$archiveKey] = $true }
+
+            # Repair a mangled archive extension in place (foo_tar_zst -> foo.tar.zst,
+            # foo_7z -> foo.7z, foo.tar.zst.zst -> foo.tar.zst) so the engine plan,
+            # base-name derivation, and compound-tar residue logic all recognize it.
+            $canonName = Get-CanonicalArchiveName ([IO.Path]::GetFileName($archive))
+            if ($canonName) {
+                $canonPath = Join-Path (Split-Path $archive -Parent) $canonName
+                if ($canonPath -ne $archive) {
+                    if (Test-Path -LiteralPath $canonPath) {
+                        Write-Log "Canonical name '$canonName' already exists; extracting mangled archive in place: $archive" "WARN"
+                    } else {
+                        try {
+                            Rename-Item -LiteralPath $archive -NewName $canonName -ErrorAction Stop
+                            Write-Log "Renamed mangled nested archive '$([IO.Path]::GetFileName($archive))' -> '$canonName'"
+                            $archive = $canonPath
+                            $archiveKey = Get-NormalizedPathKey $archive
+                            if ($archiveKey) { $visitedArchives[$archiveKey] = $true }
+                        } catch {
+                            Write-Log "Could not rename mangled nested archive $archive : $($_.Exception.Message)" "WARN"
+                        }
+                    }
+                }
+            }
 
             $sw = [System.Diagnostics.Stopwatch]::StartNew()
             $archiveName = [IO.Path]::GetFileName($archive)
@@ -176,6 +202,11 @@ function Invoke-NestedExtractionPass {
                 $status = if ($winPw -eq "") { "NoPassword" } else { "Succeeded" }
                 Write-Status "Nested extracted via $winEngine -> $outputDir" "dim"
                 Write-Log "Nested success: $archive (engine $winEngine)"
+
+                if ($script:LastExtractionEmpty) {
+                    Write-Status "Nested archive extracted but produced no files (output is empty): $archiveName" "warn"
+                    Write-Log "Nested extraction produced no files: $archive" "WARN"
+                }
 
                 if ($winPw) {
                     $lastWin = $winPw

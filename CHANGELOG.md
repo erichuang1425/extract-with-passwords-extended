@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.2.0] - 2026-07-01
+
+### Fixed
+- **GUI extraction now works.** Clicking *Start Extraction* failed with *"There is
+  no Runspace available to run scripts in this thread."* The GUI ran the work on a
+  `BackgroundWorker`, whose `DoWork` fires on a ThreadPool thread that owns no
+  PowerShell runspace — so PowerShell could not invoke the handler at all. The
+  extraction now runs in a dedicated runspace (`[PowerShell]::Create()`, the same
+  approach as parallel mode), reporting progress through a thread-safe queue that a
+  `DispatcherTimer` drains on the UI thread. Cancel and Skip Current work through a
+  shared cancellation channel, and the GUI now runs the nested-extraction post-pass
+  just like the console.
+
+### Added
+- **Inner archives beside redistributable installers are now extracted.** The
+  nested pass used to stop the moment it saw *any* `.exe`, so content packed as a
+  nested archive sitting next to a `vcredist` / `dxsetup` / .NET prerequisite was
+  never unpacked. A new redist filter (`redistFileNamePatterns`) lets the payload
+  gate ignore runtime/prerequisite installers, so it keeps descending until a
+  *real* executable payload appears. Nested extraction is now **on by default**
+  (`extractNestedArchives: true`, `maxNestedDepth: 5`).
+- **Folder names are cleaned of bracket "tag" groups.** Leading/trailing fullwidth
+  `【…】` and square `[…]` groups are stripped from the derived output-folder name —
+  e.g. `【PC+KR汉化ADV】男娘便女` → `男娘便女`, and
+  `[241128][硝石工房] IVAV!! 2nd Girl Ver25.01.13 [RJ01290563]` →
+  `IVAV!! 2nd Girl Ver25.01.13`. Parentheses and mid-title brackets are left
+  intact. Controlled by `stripBracketTagsFromFolderName` (default `true`) and still
+  runs before any custom `folderNameRules`.
+- **Mangled archive extensions are repaired and extracted.** Files whose extension
+  was mangled — `foo.tar.zst.zst`, `foldername_tar_zst`, `foldername_7z`, … — are
+  detected during the nested pass, renamed in place to their canonical form
+  (`foo.tar.zst`, `foldername.tar.zst`, `foldername.7z`), and extracted (compound
+  tars then peel to their real contents as usual).
+- **Empty-output warning.** An extraction that reports success but leaves the output
+  folder with no files is now flagged — a warning line in the console and log, and a
+  `Success (empty)` row status in the GUI.
+
 ## [4.1.1] - 2026-06-29
 
 ### Fixed

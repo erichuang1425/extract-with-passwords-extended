@@ -76,9 +76,15 @@ Describe 'Test-ConfigSane integer clamping' {
 }
 
 Describe 'Nested-archive defaults' {
-    It 'defaults ExtractNestedArchives to disabled' {
+    It 'defaults ExtractNestedArchives to enabled' {
         InModuleScope CfgUnderTest {
-            $script:ExtractNestedArchives | Should -BeFalse
+            $script:ExtractNestedArchives | Should -BeTrue
+        }
+    }
+
+    It 'defaults StripBracketTagsFromFolderName to enabled' {
+        InModuleScope CfgUnderTest {
+            $script:StripBracketTagsFromFolderName | Should -BeTrue
         }
     }
 

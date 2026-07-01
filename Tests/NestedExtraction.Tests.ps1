@@ -7,7 +7,8 @@ BeforeAll {
     function Write-Status { param($Message, $Kind) }
     function Write-Log { param($Message, $Level) }
     function Find-NestedArchives { param($Root) }
-    function Test-DirectoryHasExecutable { param($Dir) }
+    function Test-DirectoryHasExecutable { param($Dir, [switch]$IgnoreRedist) }
+    function Get-CanonicalArchiveName { param($Name) }
     function Get-EnginePlanForArchive { param($Archive, $SevenZip, $PeaZip7z, $WinRar) }
     function Get-ArchiveBaseName { param($Path) }
     function Resolve-OutputDir { param($BaseDir, $IsSharedOutput, $BehaviorOverride) }
