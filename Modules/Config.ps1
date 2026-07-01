@@ -105,7 +105,12 @@ $ExecutablePayloadExtensions = @('.exe', '.msi', '.com', '.scr')
 # name; a file whose parent path contains a redist/prerequisites folder is also
 # treated as redist. Patterns are plain regex fragments.
 $RedistFileNamePatterns = @(
-    'vc_?redist', 'vcredist', 'msvc', 'dxsetup', 'dxwebsetup', 'directx',
+    'vc_?redist', 'vcredist', 'msvc', 'dxsetup', 'dxwebsetup',
+    # A bare "directx" substring would also match a real payload that happens to
+    # be titled e.g. "DirectX Adventure.exe"; dxsetup/dxwebsetup already cover the
+    # common installer file names, so this only matches DirectX installers that
+    # spell out redist/setup/web/install elsewhere in the name.
+    'directx.*(?:redist|setup|web|install)',
     'dotnet', 'ndp\d', 'netfx', 'oalinst', 'openal',
     'ue\d?prereqsetup', 'prereq', 'prerequisite', 'physx', 'xnafx',
     'commonredist', 'redist'

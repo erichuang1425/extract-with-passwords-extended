@@ -559,6 +559,21 @@ Describe 'Test-IsRedistExecutable' {
     ) {
         Test-IsRedistExecutable -Path $Path | Should -BeFalse
     }
+
+    It 'does not flag a real payload merely named after DirectX' -ForEach @(
+        @{ Path = 'C:\out\DirectX Adventure.exe' }
+        @{ Path = 'C:\out\DirectX9.exe' }
+    ) {
+        Test-IsRedistExecutable -Path $Path | Should -BeFalse
+    }
+
+    It 'still flags a DirectX installer whose file name spells out the installer context' -ForEach @(
+        @{ Path = 'C:\out\directx_Jun2010_redist.exe' }
+        @{ Path = 'C:\out\DirectX_x64_setup.exe' }
+        @{ Path = 'C:\out\directx_web_install.exe' }
+    ) {
+        Test-IsRedistExecutable -Path $Path | Should -BeTrue
+    }
 }
 
 Describe 'Test-DirectoryHasExecutable -IgnoreRedist' {
